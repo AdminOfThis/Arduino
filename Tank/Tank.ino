@@ -26,7 +26,10 @@
 
 //*********************** CONSTANTS ***********************************
 
-uint8_t address[][6] = {"1Node", "2Node"};
+const int MOTOR_OFF = 91;
+const int CENTER = 5;
+
+const uint8_t address[][6] = {"1Node", "2Node"};
 
 //********************* END CONSTANTS *********************************
 
@@ -150,15 +153,44 @@ void loop() {
     // if disconnected
     if (!remoteState) {         
       Serial.println("Disconnected");
-      motorLeft.write(0);
-      motorRight.write(0);
+      motorLeft.write(MOTOR_OFF);
+      motorRight.write(MOTOR_OFF);
     } else {
-      Serial.println(mydata_remote.joy1Y);
 
-      int motorL = map(mydata_remote.joy1Y, 0, 1023, 0, 255);
-      
-      motorLeft.write(motorL);
-      motorRight.write(motorL);      
+      if(mydata_remote.tgl6) {
+         motorLeft.write(MOTOR_OFF);
+         motorRight.write(MOTOR_OFF);
+      } else {
+
+        //int motorL = mydata_remote.joy1Y -(mydata_remote.joy1X-512)*2;
+
+        long x1 = mydata_remote.joy1X-512;
+        long y1 = mydata_remote.joy1Y-512;
+        long z1 = mydata_remote.joy1Z-512;
+        if(abs(z1)<CENTER) {
+          z1 = 0;
+        }
+
+        double motorL = max(-512, min(512, y1 - min(0, -x1) + z1));
+        double motorR = max(-512, min(512, y1 - min(0, x1) - z1));
+         
+        motorL = map(motorL, -512, 512, 0, 179);
+        motorR = map(motorR, -512, 512, 0, 179);
+
+        Serial.print( motorL);
+        Serial.print(",");
+        Serial.println(motorR);
+
+       if(abs((180/2)-motorL)<CENTER) {
+          motorL = MOTOR_OFF;
+        }
+        if(abs((180/2)-motorR)<CENTER) {
+          motorR = MOTOR_OFF;
+        }
+        
+        motorLeft.write(motorL);
+        motorRight.write(motorR);
+      }
     }
 
   } //end of timed loop
