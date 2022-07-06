@@ -466,10 +466,12 @@ void loop() {
       mydata_send.encSw4 = buttonPressed[3];
 
       //AXIS
+      mydata_send.joy1Btn = joy1Btn;
       mydata_send.joy1X = joy1X;
       mydata_send.joy1Y = joy1Y;
       mydata_send.joy1Z = joy1Z;
 
+      mydata_send.joy2Btn = joy2Btn;
       mydata_send.joy2X = joy2X;
       mydata_send.joy2Y = joy2Y;
       mydata_send.joy2Z = joy2Z;

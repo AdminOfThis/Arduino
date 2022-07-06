@@ -8,31 +8,60 @@
 */
 #include <printf.h>
 
-
 #include <SPI.h>
 #include <nRF24L01.h>
 #include <RF24.h>
+
+#include <Servo.h>
+
+//************************** PINS *************************************
+
+#define RADIO_CE 7
+#define RADIO_CSN 8
+
+#define MOTOR_LEFT 5
+#define MOTOR_RIGHT 6
+
+//************************ END PINS ***********************************
+
+//*********************** CONSTANTS ***********************************
+
+uint8_t address[][6] = {"1Node", "2Node"};
+
+//********************* END CONSTANTS *********************************
 
 struct RECEIVE_DATA_STRUCTURE{
 //struct __attribute__((__packed__)) SEND_DATA_STRUCTURE{
   //put your variable definitions here for the data you want to send
   //THIS MUST BE EXACTLY THE SAME ON THE OTHER ARDUINO
 
-  int16_t menuDown;
-  int16_t Select;
-  int16_t menuUp;
-  int16_t toggleBottom;
-  int16_t toggleTop;
-  int16_t toggle1;
-  int16_t toggle2;
-  int16_t mode;
-  int16_t RLR;
-  int16_t RFB;
-  int16_t RT;
-  int16_t LLR;
-  int16_t LFB;
-  int16_t LT;
+  bool tgl1;
+  bool tgl2;
+  bool tgl3;
+  bool tgl4;
+  bool tgl5;
+  bool tgl6;
 
+  int16_t encVal1;
+  int16_t encVal2;
+  int16_t encVal3;
+  int16_t encVal4;
+
+  bool encSw1;
+  bool encSw2;
+  bool encSw3;
+  bool encSw4;
+
+  // Joystick
+  bool joy1Btn;
+  int16_t joy1X;
+  int16_t joy1Y;
+  int16_t joy1Z;
+
+  bool joy2Btn;
+  int16_t joy2X;
+  int16_t joy2Y;
+  int16_t joy2Z;
 };
 
 struct SEND_DATA_STRUCTURE{
@@ -42,12 +71,18 @@ struct SEND_DATA_STRUCTURE{
   int16_t count;
 };
 
+//*********************** OBJECTS ***********************************
+
+
 SEND_DATA_STRUCTURE mydata_send;
 RECEIVE_DATA_STRUCTURE mydata_remote;
 
-RF24 radio(7, 8); // CE, CSN
+RF24 radio(RADIO_CE, RADIO_CSN); // CE, CSN
 
-uint8_t address[][6] = {"1Node", "2Node"};
+Servo motorLeft;
+Servo motorRight;
+
+//********************** VARIABLES **********************************
 
 unsigned long currentMillis;
 long previousMillis = 0;    // set up timers
@@ -55,6 +90,8 @@ unsigned long remoteMillis; //last time I heard from the remote
 
 bool remoteState;
 bool remoteStateOld;
+
+//******************** END VARIABLES ********************************
 
 void setup() {
   Serial.begin(115200);
@@ -73,8 +110,18 @@ void setup() {
   //radio.setChannel(112);
   radio.setPALevel(RF24_PA_MIN);
   radio.startListening();
-  printf_begin();
-  radio.printPrettyDetails();
+  //printf_begin();
+  //radio.printPrettyDetails();
+
+  Serial.println("STARTING MOTORS");
+
+  motorLeft.attach(MOTOR_LEFT);
+  motorRight.attach(MOTOR_RIGHT);
+
+  motorLeft.write(30);
+  motorRight.write(30);
+
+  Serial.println("STARTUP COMPLETE");
 
 }
 
@@ -102,11 +149,16 @@ void loop() {
 
     // if disconnected
     if (!remoteState) {         
-      //Serial.println("Disconnected");
+      Serial.println("Disconnected");
+      motorLeft.write(0);
+      motorRight.write(0);
     } else {
+      Serial.println(mydata_remote.joy1Y);
 
-      //DO STUFF HERE
+      int motorL = map(mydata_remote.joy1Y, 0, 1023, 0, 255);
       
+      motorLeft.write(motorL);
+      motorRight.write(motorL);      
     }
 
   } //end of timed loop
