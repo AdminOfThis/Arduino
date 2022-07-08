@@ -171,8 +171,16 @@ void loop() {
           z1 = 0;
         }
 
-        double motorL = max(-512, min(512, y1 - min(0, -x1) + z1));
-        double motorR = max(-512, min(512, y1 - min(0, x1) - z1));
+        long x1Value = min(0, -x1);
+        long x2Value = min(0,x1);
+    
+        //if(y1<0) {
+        //  x1Value = -x1Value;
+        //  x2Value = -x2Value;
+        //}
+
+        double motorL = max(-512, min(512, y1 - x1Value - z1));
+        double motorR = max(-512, min(512, y1 - x2Value + z1));
          
         motorL = map(motorL, -512, 512, 0, 179);
         motorR = map(motorR, -512, 512, 0, 179);
