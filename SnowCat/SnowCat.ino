@@ -14,7 +14,11 @@
 
 #include <Servo.h>
 
+#include <Adafruit_NeoPixel.h>
+
 //************************** PINS *************************************
+
+#define LED_PIN 2
 
 #define RADIO_CE 7
 #define RADIO_CSN 8
@@ -25,6 +29,8 @@
 //************************ END PINS ***********************************
 
 //*********************** CONSTANTS ***********************************
+
+const byte LED_COUNT = 10;
 
 const int MOTOR_OFF = 91;
 const int CENTER = 5;
@@ -77,10 +83,15 @@ struct SEND_DATA_STRUCTURE{
 //*********************** OBJECTS ***********************************
 
 
-SEND_DATA_STRUCTURE mydata_send;
-RECEIVE_DATA_STRUCTURE mydata_remote;
+SEND_DATA_STRUCTURE data_send;
+RECEIVE_DATA_STRUCTURE data_remote;
+
+RECEIVE_DATA_STRUCTURE data_prev;
+
 
 RF24 radio(RADIO_CE, RADIO_CSN); // CE, CSN
+
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 Servo motorLeft;
 Servo motorRight;
@@ -94,10 +105,15 @@ unsigned long remoteMillis; //last time I heard from the remote
 bool remoteState;
 bool remoteStateOld;
 
+int ledBrightness = 255;
+
 //******************** END VARIABLES ********************************
 
 void setup() {
   Serial.begin(115200);
+
+  strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
+  strip.show();            // Turn OFF all pixels ASAP
 
   while (!radio.begin()) {
     Serial.println("Radio hardware not responding!");
@@ -135,12 +151,10 @@ void loop() {
 
   if (radio.available()) { //try to receive data
     remoteMillis = currentMillis;
-
-     radio.read(&mydata_remote, sizeof(RECEIVE_DATA_STRUCTURE));
+     data_prev = data_remote;
+     radio.read(&data_remote, sizeof(RECEIVE_DATA_STRUCTURE));
      remoteMillis = currentMillis;
   }
-
-  
 
    // is the remote disconnected for too long ?
     if (currentMillis - remoteMillis > 500) {
@@ -157,16 +171,15 @@ void loop() {
       motorRight.write(MOTOR_OFF);
     } else {
 
-      if(mydata_remote.tgl6) {
+      // MOTORS
+  
+      if(data_remote.tgl6) {
          motorLeft.write(MOTOR_OFF);
          motorRight.write(MOTOR_OFF);
       } else {
-
-        //int motorL = mydata_remote.joy1Y -(mydata_remote.joy1X-512)*2;
-
-        long x1 = mydata_remote.joy1X-512;
-        long y1 = mydata_remote.joy1Y-512;
-        long z1 = mydata_remote.joy1Z-512;
+        long x1 = data_remote.joy1X-512;
+        long y1 = data_remote.joy1Y-512;
+        long z1 = data_remote.joy1Z-512;
         if(abs(z1)<CENTER) {
           z1 = 0;
         }
@@ -191,8 +204,39 @@ void loop() {
         motorLeft.write(motorL);
         motorRight.write(motorR);
       }
+
+      // LEDS
+      if(data_remote.tgl1 != data_prev.tgl1||data_remote.encVal2 !=data_prev.encVal2 ) {
+      if(data_remote.tgl1) {
+         for(int i= 0;i<LED_COUNT;i++) {
+            strip.setPixelColor(i, strip.Color(0, 0, 0));
+         }
+         strip.show(); 
+      } else {
+         for(int i= 0;i<LED_COUNT;i++) {
+            strip.setPixelColor(i, Wheel((data_remote.encVal2*5)%255));
+         }
+         strip.show();
+      }
+    }
     }
 
   } //end of timed loop
   
 } //end of main loop
+
+// Input a value 0 to 255 to get a color value.
+// The colours are a transition r - g - b - back to r.
+uint32_t Wheel(byte WheelPos) {
+  if(WheelPos < 85) {
+    return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+  } 
+  else if(WheelPos < 170) {
+    WheelPos -= 85;
+    return strip.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+  } 
+  else {
+    WheelPos -= 170;
+    return strip.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+  }
+}

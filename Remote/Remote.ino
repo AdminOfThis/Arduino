@@ -25,7 +25,7 @@
 
 //************************** PINS *************************************
 
-#define LED_PIN    2
+#define LED_PIN 2
 
 #define RADIO_CE 7
 #define RADIO_CSN 8
@@ -74,13 +74,15 @@
 
 //*********************** CONSTANTS ***********************************
 
-const long STARTUP_DELAY = 1000;
+const long STARTUP_DELAY = 500;
 
 uint8_t address[][6] = {"1Node", "2Node"};
 
 const byte LED_COUNT = 6;
 
 const int MODE_SHOW_TIME = 1000;
+
+const int NUM_SETTINGS = 2;
 
 enum DISPLAY_MODE {
   NONE = 0,
@@ -161,6 +163,9 @@ unsigned long previousMillis = 0;
 bool modeSignClear = false;
 
 bool modeChange = false;
+
+int setupSetting = 0;
+int prevSetupSetting = 0;
 
 int mode = NONE;
 int prevMode;
@@ -331,15 +336,48 @@ void loop() {
     readEncoder(mode, digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal[0]);
     mode = abs(mode) % (ENCODER-NONE+1);
   } else {
-    if(mode == SETUP) {
-      readEncoder(ledBrightness, digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal[0]);
-      ledBrightness = max(0, min(255, ledBrightness));
+    if(mode == SETUP ) {
+      if(setupSetting == 0) {
+      //change LED_BRIGHTNESS
+         readEncoder(ledBrightness, digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal[0]);
+         ledBrightness = max(0, min(255, ledBrightness));
+      }
     } else {
       readEncoder(posEncoder[0], digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal[0]);
     }
   }
-  //Encoder 2
-  readEncoder(posEncoder[1], pcfEncoder.read(ENC2_1), pcfEncoder.read(ENC2_2), prevEnVal[1]);
+
+   //Encoder 2
+   if(!modeChange && mode == SETUP) {
+
+      readEncoder(setupSetting, pcfEncoder.read(ENC2_1), pcfEncoder.read(ENC2_2), prevEnVal[1]);   
+      setupSetting  = max(0, setupSetting %(NUM_SETTINGS+1));
+    
+     //Actual Setting
+     if(setupSetting != prevSetupSetting) {
+        
+        // Setting Number in top left corner
+       int bla = setupSetting+1;
+       printIfNumChanged(bla, prevSetupSetting, 0, 0, false);
+       screen.drawString(2,0,"/");
+       int bla2 = NUM_SETTINGS+1;
+       int bla3 = NUM_SETTINGS;
+       printIfNumChanged(bla2, bla3, 4, 0, false);
+       prevSetupSetting = setupSetting;
+        
+        screen.drawString(0, 3, "               ");
+        if(setupSetting == 0) {
+           screen.drawString(0, 3, "BRIGHTNESS: ");
+        } else if(setupSetting == 1) {
+           screen.drawString(0, 3, "BULLSHIT: ");
+        }else if(setupSetting == 2) {
+           screen.drawString(0, 3, "SET 3: ");
+        }
+       }
+    } else {
+      readEncoder(posEncoder[1], pcfEncoder.read(ENC2_1), pcfEncoder.read(ENC2_2), prevEnVal[1]);    
+    }
+  
   //Encoder 3
   readEncoder(posEncoder[2], pcfEncoder.read(ENC3_1), pcfEncoder.read(ENC3_2), prevEnVal[2]);
   //Encoder 4
@@ -382,7 +420,7 @@ void loop() {
   // ************************ DISPLAY **********************************
 
   for (int i = 0; i < 6; i++) {
-    if (switches[i]) {
+    if (switches[5-i]) {
         strip.setPixelColor(i, strip.Color(ledBrightness, 0, 0));
       } else {
         strip.setPixelColor(i, strip.Color(0, ledBrightness, 0));
@@ -432,9 +470,7 @@ void loop() {
     if(mode == NONE) {
       screen.drawString(15, 0, (connectionState ? "C" : "N"));
     }
-    if(mode == SETUP) {
-       screen.drawString(0, 3, "BRIGHTNESS: ");
-    }
+    
   }
 
   //********************* TIMED LOOP **********************************
@@ -503,7 +539,10 @@ void loop() {
         printIfNumChanged(posEncoder[3], posEncoderPrev[3], 16,6, true);
       }
       if(mode == SETUP) {
-        printIfNumChanged(ledBrightness, prevLedBrightness, 12, 3, false);
+          
+        if(setupSetting==0) {
+          printIfNumChanged(ledBrightness, prevLedBrightness, 12, 3, false);
+        }
       }
     }
   }
