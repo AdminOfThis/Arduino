@@ -30,7 +30,9 @@
 
 //*********************** CONSTANTS ***********************************
 
-const byte LED_COUNT = 10;
+const byte LED_COUNT = 40;
+
+const byte LED_MODES = 2;
 
 const int MOTOR_OFF = 91;
 const int CENTER = 5;
@@ -106,6 +108,11 @@ bool remoteState;
 bool remoteStateOld;
 
 int ledBrightness = 255;
+int ledMode = 0;
+bool ledRefresh = true;
+int ledCounter = 0;
+unsigned long ledModeDelta = 0;
+unsigned long ledDelta = 0;
 
 //******************** END VARIABLES ********************************
 
@@ -190,10 +197,6 @@ void loop() {
         motorL = map(motorL, -512, 512, 0, 179);
         motorR = map(motorR, -512, 512, 0, 179);
 
-        Serial.print( motorL);
-        Serial.print(",");
-        Serial.println(motorR);
-
        if(abs((180/2)-motorL)<CENTER) {
           motorL = MOTOR_OFF;
         }
@@ -206,21 +209,51 @@ void loop() {
       }
 
       // LEDS
-      if(data_remote.tgl1 != data_prev.tgl1||data_remote.encVal2 !=data_prev.encVal2 ) {
-      if(data_remote.tgl1) {
+      if(data_remote.encSw4 && !data_prev.encSw4 && ledModeDelta+100<=millis()) {
+        ledModeDelta = millis();
+        ledRefresh = true;
+        ledMode=(ledMode+1)%LED_MODES;
+        Serial.print("LED_MODE  ");
+        Serial.println(ledMode);
+      }
+
+      if(data_remote.tgl1&&!data_prev.tgl1 || ledRefresh) {
          for(int i= 0;i<LED_COUNT;i++) {
             strip.setPixelColor(i, strip.Color(0, 0, 0));
          }
-         strip.show(); 
-      } else {
-         for(int i= 0;i<LED_COUNT;i++) {
-            strip.setPixelColor(i, Wheel((data_remote.encVal2*5)%255));
-         }
          strip.show();
-      }
+         Serial.println("LEDS OFF");
+      } 
+      if(!data_remote.tgl1) {
+        switch(ledMode) {
+          case 0:
+            if(data_remote.encVal2 !=data_prev.encVal2 || ledRefresh) {
+              for(int i= 0;i<LED_COUNT;i++) {
+                strip.setPixelColor(i, Wheel((data_remote.encVal2*5)%255));
+              }
+              strip.show();
+            }
+          break;
+          case 1:
+            int t = max(10, min(1000, (data_remote.encVal3*10)));
+            if(ledDelta+t<=millis()) {
+              ledDelta = millis();
+              strip.setPixelColor(ledCounter, 0);
+              strip.setPixelColor((ledCounter+1)%LED_COUNT, 0);
+              strip.setPixelColor(((ledCounter+(LED_COUNT/2))%LED_COUNT), 0);
+              strip.setPixelColor(((ledCounter+1+(LED_COUNT/2))%LED_COUNT), 0);
+              ledCounter= (ledCounter+1)%LED_COUNT;
+              strip.setPixelColor(ledCounter, Wheel((data_remote.encVal2*5)%255));
+              strip.setPixelColor((ledCounter+1)%LED_COUNT, Wheel((data_remote.encVal2*5)%255));
+             strip.setPixelColor(((ledCounter+(LED_COUNT/2))%LED_COUNT), Wheel((data_remote.encVal2*5)%255));
+              strip.setPixelColor(((ledCounter+1+(LED_COUNT/2))%LED_COUNT), Wheel((data_remote.encVal2*5)%255));
+              strip.show();
+            }
+          break;
+        }
+        ledRefresh = false;
+      }        
     }
-    }
-
   } //end of timed loop
   
 } //end of main loop
