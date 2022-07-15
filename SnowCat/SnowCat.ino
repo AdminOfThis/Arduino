@@ -35,6 +35,8 @@ const byte LED_COUNT = 40;
 const byte LED_MODES = 2;
 
 const int MOTOR_OFF = 91;
+const int MOTOR_MAX = 175;
+const int MOTOR_MIN = 5;
 const int CENTER = 5;
 
 const uint8_t address[][6] = {"1Node", "2Node"};
@@ -194,8 +196,8 @@ void loop() {
         double motorL = max(-512, min(512, y1 - min(0, -x1) - z1));
         double motorR = max(-512, min(512, y1 - min(0,x1) + z1));
          
-        motorL = map(motorL, -512, 512, 0, 179);
-        motorR = map(motorR, -512, 512, 0, 179);
+        motorL = map(motorL, -512, 512, MOTOR_MIN, MOTOR_MAX);
+        motorR = map(motorR, -512, 512, MOTOR_MIN, MOTOR_MAX);
 
        if(abs((180/2)-motorL)<CENTER) {
           motorL = MOTOR_OFF;
@@ -209,9 +211,11 @@ void loop() {
       }
 
       // LEDS
-      if(data_remote.encSw4 && !data_prev.encSw4 && ledModeDelta+100<=millis()) {
+      //if mode changed or toggle changed
+      if((data_remote.encSw4 && !data_prev.encSw4 && ledModeDelta+100<=millis()) || (!data_remote.tgl1 && data_prev.tgl1)) {
         ledModeDelta = millis();
         ledRefresh = true;
+        ledBrightness = 255;
         ledMode=(ledMode+1)%LED_MODES;
         Serial.print("LED_MODE  ");
         Serial.println(ledMode);
@@ -225,6 +229,7 @@ void loop() {
          Serial.println("LEDS OFF");
       } 
       if(!data_remote.tgl1) {
+        int t = max(10, min(1000, (data_remote.encVal3*10)));
         switch(ledMode) {
           case 0:
             if(data_remote.encVal2 !=data_prev.encVal2 || ledRefresh) {
@@ -235,7 +240,6 @@ void loop() {
             }
           break;
           case 1:
-            int t = max(10, min(1000, (data_remote.encVal3*10)));
             if(ledDelta+t<=millis()) {
               ledDelta = millis();
               strip.setPixelColor(ledCounter, 0);
