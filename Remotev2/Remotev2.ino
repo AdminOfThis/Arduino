@@ -67,26 +67,17 @@
 
 //*********************** CONSTANTS ***********************************
 
+char *VERSION = "0.1.2";
+
 uint8_t address[][6] = {"1Node", "2Node"};
 
 const byte LED_COUNT = 6;
-
-const int MODE_SHOW_TIME = 1000;
-
-const int NUM_SETTINGS = 2;
-
-enum DISPLAY_MODE
-{
-  NONE = 0,
-  SETUP,
-  JOYSTICK,
-  ENCODER
-};
 
 enum INPUT_MODE
 {
   MENU,
   DATA,
+  INFO,
   INPUT_INTEGER
 };
 
@@ -150,9 +141,9 @@ PCF8574 pcfSwitch(0x20);
 PCF8574 pcfEncoder(0x21);
 PCF8574 divEncoder(0x22);
 
-char *topStrings[] = {"Data", "Setup", "Model", "Version", "Reboot"};
+char *topStrings[] = {"Data", "Setup", "Version", "Reboot"};
 char *setupStrings[] = {"Back ...", "LED Brightness", "RF-Strength", "Startup-Delay"};
-Menu topMenu(topStrings, 5);
+Menu topMenu(topStrings, 4);
 Menu setupMenu(setupStrings, 4);
 
 Menu *activeMenu = &topMenu;
@@ -161,9 +152,10 @@ Menu *activeMenu = &topMenu;
 
 //********************** VARIABLES **********************************
 
-int startupDelay = 500;
+int startupDelay = 5;
 
 int inputMode = MENU;
+long lastAction = 0;
 
 int *inputIntegerVal;
 int inputIntegerMin;
@@ -175,18 +167,7 @@ bool prevConnectionState = false;
 
 unsigned long previousMillis = 0;
 
-bool modeSignClear = false;
-
-bool modeChange = false;
-
-int setupSetting = 0;
-int prevSetupSetting = 0;
-
-int mode = NONE;
-int prevMode;
-
 int ledBrightness = 64;
-int prevLedBrightness;
 
 // Encoder
 int posEncoder[] = {0, 0, 0, 0};
@@ -227,7 +208,7 @@ void setup()
   pinMode(ENC1_SW, INPUT_PULLUP);
 
   ledBrightness = EEPROM.read(0);
-  startupDelay = EEPROM.read(16);
+  startupDelay =  EEPROM.read(8);
 
   strip.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();  // Turn OFF all pixels ASAP
@@ -241,11 +222,11 @@ void setup()
   printCentered("Remote v0.1", 2);
 
   long t = millis();
-  while (t + startupDelay / 2 > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) / 2 > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   strip.setPixelColor(5, strip.Color(0, ledBrightness, 0));
-  while (t + startupDelay / 2 > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) / 2 > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -257,7 +238,7 @@ void setup()
   strip.show();
 
   t = millis();
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -267,7 +248,7 @@ void setup()
   strip.setPixelColor(4, strip.Color(0, ledBrightness, 0));
   strip.show();
   t = millis();
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -280,7 +261,7 @@ void setup()
   strip.setPixelColor(3, strip.Color(0, 0, ledBrightness));
   strip.show();
   t = millis();
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -306,7 +287,7 @@ void setup()
   strip.setPixelColor(3, strip.Color(0, ledBrightness, 0));
   strip.show();
   t = millis();
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -319,7 +300,7 @@ void setup()
   strip.setPixelColor(2, strip.Color(0, 0, ledBrightness));
   strip.show();
   t = millis();
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -336,7 +317,7 @@ void setup()
   strip.setPixelColor(2, strip.Color(0, ledBrightness, 0));
   strip.show();
   t = millis();
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -354,7 +335,7 @@ void setup()
   {
     strip.setPixelColor(i, strip.Color(0, ledBrightness, 0));
     t = millis();
-    while (t + startupDelay / 4 > millis() && digitalRead(ENC1_SW))
+    while (t + (startupDelay * 100) / 4 > millis() && digitalRead(ENC1_SW))
     {
     } // delay, but shortcut with button
     strip.show();
@@ -364,14 +345,14 @@ void setup()
   Serial.println("Startup complete");
   printCentered("Startup complete", 2);
   t = millis();
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
   {
   }
   printCentered("Enjoy!", 4);
-  while (t + startupDelay > millis() && digitalRead(ENC1_SW))
+  while (t + (startupDelay * 100) > millis() && digitalRead(ENC1_SW))
   {
   } // delay, but shortcut with button
   while (!digitalRead(ENC1_SW))
@@ -391,161 +372,102 @@ void setup()
 }
 
 //********************** MAIN LOOP **********************************
-int menuPos = 0;
-
-long lastAction = 0;
 
 void loop()
 {
 
   unsigned long currentMillis = millis();
 
+  handleInputs();
+
+  handleMenuIO(currentMillis);
+
+  
+  //********************* TIMED LOOP **********************************
+
+  if (currentMillis - previousMillis >= 10)
+  {
+    previousMillis = currentMillis;
+
+    handleRF(currentMillis);
+
+    handleMenuDisplay();
+
+    handleLEDs();
+  }
+}
+
+void handleMenuDisplay()
+{
   switch (inputMode)
   {
   case MENU:
     (*activeMenu).updateMenu(screen, readEncoder(0, (*activeMenu).getIndex()));
     break;
+  case DATA:
+    showJoystickData(false);
+    break;
   case INPUT_INTEGER:
-    int valNew = min(inputIntegerMax, max(inputIntegerMin, readEncoder(0, *inputIntegerVal, inputIntegerStepsize)));
+  int reading = readEncoder(0, *inputIntegerVal, inputIntegerStepsize);
 
-    if (valNew != *inputIntegerVal)
+    int valNew = min(inputIntegerMax, max(inputIntegerMin, reading));
+
+    if (reading != *inputIntegerVal)
     {
+      *inputIntegerVal = valNew;
       drawInputInteger(valNew);
     }
     break;
   }
+}
 
-  prevButtonPressed[0] = buttonPressed[0];
-  buttonPressed[0] = !digitalRead(ENC1_SW);
+void handleRF(long currentMillis)
+{
+  //*********************** SEND DATA TO SENDER OBJECT *****************************
+  // Switches
+  mydata_send.tgl1 = switches[0];
+  mydata_send.tgl2 = switches[1];
+  mydata_send.tgl3 = switches[2];
+  mydata_send.tgl4 = switches[3];
+  mydata_send.tgl5 = switches[4];
+  mydata_send.tgl6 = switches[5];
 
-  if (buttonPressed[0] && !prevButtonPressed[0] && currentMillis >= lastAction + 500)
+  // Encoder
+  mydata_send.encVal1 = posEncoder[0];
+  mydata_send.encVal2 = posEncoder[1];
+  mydata_send.encVal3 = posEncoder[2];
+  mydata_send.encVal4 = posEncoder[3];
+
+  // Encoder Buttons
+  mydata_send.encSw1 = buttonPressed[0];
+  mydata_send.encSw2 = buttonPressed[1];
+  mydata_send.encSw3 = buttonPressed[2];
+  mydata_send.encSw4 = buttonPressed[3];
+
+  // AXIS
+  mydata_send.joy1Btn = joy1Btn;
+  mydata_send.joy1X = joy1X;
+  mydata_send.joy1Y = joy1Y;
+  mydata_send.joy1Z = joy1Z;
+
+  mydata_send.joy2Btn = joy2Btn;
+  mydata_send.joy2X = joy2X;
+  mydata_send.joy2Y = joy2Y;
+  mydata_send.joy2Z = joy2Z;
+
+  // ************************* SEND DATA *********************************
+
+  connectionState = radio.write(&mydata_send, sizeof(SEND_DATA_STRUCTURE));
+
+  if (connectionState != prevConnectionState)
   {
-    lastAction = currentMillis;
-    switch (inputMode)
-    {
-    case MENU:
-      (*activeMenu).action();
-      break;
-    case INPUT_INTEGER:
-      inputMode = MENU;
-      EEPROM.write(0, ledBrightness);
-      EEPROM.write(16, startupDelay);
-      (*activeMenu).draw(screen);
-      break;
-    }
+    screen.drawString(15, 0, (connectionState ? "C" : "N"));
+    prevConnectionState = connectionState;
   }
 }
 
-void loop2()
+void handleLEDs()
 {
-
-  unsigned long currentMillis = millis();
-
-  // Encoder 1
-  if (modeChange)
-  {
-    // readEncoder(mode, digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal[0]);
-    mode = abs(mode) % (ENCODER - NONE + 1);
-  }
-  else
-  {
-    if (mode == SETUP)
-    {
-      if (setupSetting == 0)
-      {
-        // change LED_BRIGHTNESS
-        // readEncoder(ledBrightness, digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal[0]);
-        ledBrightness = max(0, min(255, ledBrightness));
-      }
-    }
-    else
-    {
-      // readEncoder(posEncoder[0], digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal[0]);
-    }
-  }
-
-  // Encoder 2
-  if (!modeChange && mode == SETUP)
-  {
-
-    // readEncoder(setupSetting, pcfEncoder.read(ENC2_1), pcfEncoder.read(ENC2_2), prevEnVal[1]);
-    setupSetting = max(0, setupSetting % (NUM_SETTINGS + 1));
-
-    // Actual Setting
-    if (setupSetting != prevSetupSetting)
-    {
-
-      // Setting Number in top left corner
-      int bla = setupSetting + 1;
-      printIfNumChanged(bla, prevSetupSetting, 0, 0, false);
-      screen.drawString(2, 0, "/");
-      int bla2 = NUM_SETTINGS + 1;
-      int bla3 = NUM_SETTINGS;
-      printIfNumChanged(bla2, bla3, 4, 0, false);
-      prevSetupSetting = setupSetting;
-
-      screen.drawString(0, 3, "               ");
-      if (setupSetting == 0)
-      {
-        screen.drawString(0, 3, "BRIGHTNESS: ");
-      }
-      else if (setupSetting == 1)
-      {
-        screen.drawString(0, 3, "BULLSHIT: ");
-      }
-      else if (setupSetting == 2)
-      {
-        screen.drawString(0, 3, "SET 3: ");
-      }
-    }
-  }
-  else
-  {
-    // readEncoder(posEncoder[1], pcfEncoder.read(ENC2_1), pcfEncoder.read(ENC2_2), prevEnVal[1]);
-  }
-
-  // Encoder 3
-  // readEncoder(posEncoder[2], pcfEncoder.read(ENC3_1), pcfEncoder.read(ENC3_2), prevEnVal[2]);
-  // Encoder 4
-  // readEncoder(posEncoder[3], pcfEncoder.read(ENC4_1), pcfEncoder.read(ENC4_2), prevEnVal[3]);
-
-  prevButtonPressed[0] = buttonPressed[0];
-  buttonPressed[0] = !digitalRead(ENC1_SW);
-  prevButtonPressed[1] = buttonPressed[0];
-  buttonPressed[1] = !pcfSwitch.read(ENC2_SW);
-  prevButtonPressed[2] = buttonPressed[2];
-  buttonPressed[2] = !pcfEncoder.read(ENC3_SW);
-  prevButtonPressed[3] = buttonPressed[3];
-  buttonPressed[3] = !pcfEncoder.read(ENC4_SW);
-
-  // If ENC_1 pressed, toggle mode-Change mode
-  if (buttonPressed[0] && !prevButtonPressed[0])
-  {
-    modeChange = !modeChange;
-    if (!modeChange && mode == SETUP)
-    {
-      EEPROM.update(0, ledBrightness);
-    }
-  }
-
-  for (int i = 0; i < sizeof(switches); i++)
-  {
-    switches[i] = pcfSwitch.read(i);
-  }
-
-  joy1Btn = divEncoder.read(JOY1BUT);
-  joy2Btn = divEncoder.read(JOY2BUT);
-
-  joy1X = analogRead(JOY1X);
-  joy1Y = analogRead(JOY1Y);
-  joy1Z = analogRead(JOY1Z);
-
-  joy2X = analogRead(JOY2X);
-  joy2Y = analogRead(JOY2Y);
-  joy2Z = analogRead(JOY2Z);
-
-  // ************************ DISPLAY **********************************
-
   for (int i = 0; i < 6; i++)
   {
     if (switches[5 - i])
@@ -565,140 +487,17 @@ void loop2()
       strip.setPixelColor(4 - i, strip.Color(0, 0, ledBrightness));
     }
   }
-
-  // blink LEDs if modeChange is active
-  if (modeChange && (millis() / 500) % 2 == 0)
-  {
-    for (int i = 0; i < 6; i++)
-    {
-      strip.setPixelColor(i, strip.Color(0, 0, ledBrightness));
-    }
-  }
   strip.show();
-
-  // CHANGE MODE
-  if (mode != prevMode)
-  {
-    prevMode = mode;
-    // mode = abs(posEncoder[0]) % (ENCODER-NONE+1);
-    modeSignClear = true;
-    screen.clear();
-    switch (mode)
-    {
-    case NONE:
-      printCentered("DEFAULT", 3);
-      break;
-    case SETUP:
-      printCentered("SETUP", 3);
-      break;
-    case JOYSTICK:
-      printCentered("JOYSTICK", 3);
-      break;
-    case ENCODER:
-      printCentered("ENCODER", 3);
-      break;
-    }
-  }
-
-  // Stop displaying mode in center display
-  if (modeSignClear && !modeChange)
-  {
-    screen.clear();
-    modeSignClear = false;
-    if (mode == NONE)
-    {
-      screen.drawString(15, 0, (connectionState ? "C" : "N"));
-    }
-  }
-
-  //********************* TIMED LOOP **********************************
-  if (currentMillis - previousMillis >= 10)
-  {
-
-    previousMillis = currentMillis;
-
-    if (mode != SETUP)
-    {
-
-      //*********************** SEND DATA TO SENDER OBJECT *****************************
-      // Switches
-      mydata_send.tgl1 = switches[0];
-      mydata_send.tgl2 = switches[1];
-      mydata_send.tgl3 = switches[2];
-      mydata_send.tgl4 = switches[3];
-      mydata_send.tgl5 = switches[4];
-      mydata_send.tgl6 = switches[5];
-
-      // Encoder
-      mydata_send.encVal1 = posEncoder[0];
-      mydata_send.encVal2 = posEncoder[1];
-      mydata_send.encVal3 = posEncoder[2];
-      mydata_send.encVal4 = posEncoder[3];
-
-      // Encoder Buttons
-      mydata_send.encSw1 = buttonPressed[0];
-      mydata_send.encSw2 = buttonPressed[1];
-      mydata_send.encSw3 = buttonPressed[2];
-      mydata_send.encSw4 = buttonPressed[3];
-
-      // AXIS
-      mydata_send.joy1Btn = joy1Btn;
-      mydata_send.joy1X = joy1X;
-      mydata_send.joy1Y = joy1Y;
-      mydata_send.joy1Z = joy1Z;
-
-      mydata_send.joy2Btn = joy2Btn;
-      mydata_send.joy2X = joy2X;
-      mydata_send.joy2Y = joy2Y;
-      mydata_send.joy2Z = joy2Z;
-
-      // ************************* SEND DATA *********************************
-
-      connectionState = radio.write(&mydata_send, sizeof(SEND_DATA_STRUCTURE));
-
-      if (connectionState != prevConnectionState && mode == NONE)
-      {
-        screen.drawString(15, 0, (connectionState ? "C" : "N"));
-        prevConnectionState = connectionState;
-      }
-    }
-
-    if (!modeChange)
-    {
-      // SHOW DATA
-      if (mode == JOYSTICK)
-      {
-        printIfNumChanged(joy1X, prevJoy1X, 0, 0, false);
-        printIfNumChanged(joy1Y, prevJoy1Y, 0, 3, false);
-        printIfNumChanged(joy1Z, prevJoy1Z, 0, 6, false);
-        printIfNumChanged(joy2X, prevJoy1X, 16, 0, true);
-        printIfNumChanged(joy2Y, prevJoy1Y, 16, 3, true);
-        printIfNumChanged(joy2Z, prevJoy1Z, 16, 6, true);
-      }
-      if (mode == ENCODER)
-      {
-        printIfNumChanged(posEncoder[0], posEncoderPrev[0], 0, 3, false);
-        printIfNumChanged(posEncoder[1], posEncoderPrev[1], 0, 6, false);
-        printIfNumChanged(posEncoder[2], posEncoderPrev[2], 16, 3, true);
-        printIfNumChanged(posEncoder[3], posEncoderPrev[3], 16, 6, true);
-      }
-      if (mode == SETUP)
-      {
-
-        if (setupSetting == 0)
-        {
-          printIfNumChanged(ledBrightness, prevLedBrightness, 12, 3, false);
-        }
-      }
-    }
-  }
-  //******************** END TIMED LOOP *******************************
 }
-//******************** END MAIN LOOP ********************************
 
 void printIfNumChanged(int &val, int &prevVal, int x, int y, bool centerOnRight)
 {
-  if (val != prevVal)
+  printIfNumChanged(val, prevVal, x, y, centerOnRight, false);
+}
+
+void printIfNumChanged(int &val, int &prevVal, int x, int y, bool centerOnRight, bool forceDisplay)
+{
+  if (val != prevVal || forceDisplay)
   {
     prevVal = val;
     char buf[4];
@@ -766,13 +565,112 @@ int readEncoder(int val, bool val1, bool val2, bool &valAPrev, int stepSize)
   return valNew;
 }
 
+void inputInteger(char *title, int min, int max, int *val, int stepSize)
+{
+  inputMode = INPUT_INTEGER;
+  inputIntegerVal = val;
+  inputIntegerMin = min;
+  inputIntegerMax = max;
+  inputIntegerStepsize = stepSize;
+  screen.clear();
+  screen.drawString(0, 0, title);
+  drawInputInteger(*val);
+}
+
+void drawInputInteger(int valNew)
+{
+  char c[16];
+  itoa(*inputIntegerVal, c, 10);
+  screen.drawString(6, 4, "    ");
+  screen.drawString(6, 4, c);
+  screen.drawString(0, 6, "|              |");
+  double percent = ((double)valNew / ((double)inputIntegerMax));
+  for (int i = 0; i < (round(percent * 14)); i++)
+  {
+    screen.drawString(i + 1, 6, "=");
+  }
+}
+
+void showJoystickData(bool force)
+{
+  printIfNumChanged(joy1X, prevJoy1X, 0, 0, false, force);
+  printIfNumChanged(joy1Y, prevJoy1Y, 0, 3, false, force);
+  printIfNumChanged(joy1Z, prevJoy1Z, 0, 6, false, force);
+  printIfNumChanged(joy2X, prevJoy1X, 16, 0, true, force);
+  printIfNumChanged(joy2Y, prevJoy1Y, 16, 3, true, force);
+  printIfNumChanged(joy2Z, prevJoy1Z, 16, 6, true, force);
+}
+
+
+
+void handleInputs()
+{
+  prevButtonPressed[0] = buttonPressed[0];
+  buttonPressed[0] = !digitalRead(ENC1_SW);
+  prevButtonPressed[1] = buttonPressed[0];
+  buttonPressed[1] = !pcfSwitch.read(ENC2_SW);
+  prevButtonPressed[2] = buttonPressed[2];
+  buttonPressed[2] = !pcfEncoder.read(ENC3_SW);
+  prevButtonPressed[3] = buttonPressed[3];
+  buttonPressed[3] = !pcfEncoder.read(ENC4_SW);
+
+  for (int i = 0; i < sizeof(switches); i++)
+  {
+    switches[i] = pcfSwitch.read(i);
+  }
+
+  joy1Btn = divEncoder.read(JOY1BUT);
+  joy2Btn = divEncoder.read(JOY2BUT);
+
+  joy1X = analogRead(JOY1X);
+  joy1Y = analogRead(JOY1Y);
+  joy1Z = analogRead(JOY1Z);
+
+  joy2X = analogRead(JOY2X);
+  joy2Y = analogRead(JOY2Y);
+  joy2Z = analogRead(JOY2Z);
+}
+
+void handleMenuIO(long currentMillis)
+{
+  if (buttonPressed[0] && !prevButtonPressed[0] && currentMillis >= lastAction + 500)
+  {
+    lastAction = currentMillis;
+    switch (inputMode)
+    {
+    case MENU:
+      (*activeMenu).action();
+      break;
+    case INPUT_INTEGER:
+      EEPROM.write(0, ledBrightness);
+      EEPROM.write(8, startupDelay);
+    case DATA:
+    case INFO:
+      inputMode = MENU;
+      (*activeMenu).draw(screen);
+      break;
+    }
+  }
+}
+
 void setupMenues()
 {
-
+  topMenu.actions[0] = []()
+  {
+    inputMode = DATA;
+    showJoystickData(true);
+    screen.clear();
+  };
   topMenu.actions[1] = []()
   {
     activeMenu = &setupMenu;
     (*activeMenu).draw(screen);
+  };
+  topMenu.actions[2] = []()
+  {
+    inputMode = INFO;
+    screen.clear();
+    printCentered(VERSION, 2);
   };
   setupMenu.actions[0] = []() // Back
   {
@@ -785,33 +683,6 @@ void setupMenues()
   };
   setupMenu.actions[3] = []() // LED Brightness
   {
-    inputInteger("Startup-Delay", 0, 1000, &startupDelay, 100);
+    inputInteger("Startup-Delay", 0, 10, &startupDelay, 1);
   };
-}
-
-void inputInteger(char *title, int min, int max, int *val, int stepSize)
-{
-  inputIntegerVal = val;
-  inputIntegerMin = min;
-  inputIntegerMax = max;
-  inputIntegerStepsize = stepSize;
-  screen.clear();
-  screen.drawString(0, 0, title);
-  inputMode = INPUT_INTEGER;
-  drawInputInteger(*val);
-}
-
-void drawInputInteger(int valNew)
-{
-  *inputIntegerVal = valNew;
-  char c[16];
-  itoa(*inputIntegerVal, c, 10);
-  screen.drawString(6, 4, "    ");
-  screen.drawString(6, 4, c);
-  screen.drawString(0, 6, "|              |");
-  double percent = ((double)valNew / ((double)inputIntegerMax));
-  for (int i = 0; i < (round(percent * 14)); i++)
-  {
-    screen.drawString(i + 1, 6, "=");
-  }
 }
