@@ -1,0 +1,8 @@
+{
+    "sketch": "Remotev2.ino",
+    "configuration": "cpu=atmega328old",
+    "board": "arduino:avr:nano",
+    "port": "COM13",
+    "output": "build",
+    "programmer": "arduino:arduinoasisp"
+}
