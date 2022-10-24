@@ -1,12 +1,3 @@
-/*
-  Arduino Wireless Communication Tutorial
-      Example 1 - Transmitter Code
-
-  by Dejan Nedelkovski, www.HowToMechatronics.com
-
-  Library: TMRh20/RF24, https://github.com/tmrh20/RF24/
-*/
-
 #include <printf.h>
 
 #include <SPI.h>
@@ -251,19 +242,20 @@ void setup() {
   while(t+STARTUP_DELAY>millis()&&digitalRead(ENC1_SW)) { } //delay, but shortcut with button
   while(!digitalRead(ENC1_SW)){}
 
+
   while (!radio.begin()) {
     Serial.println("ERROR: Radio hardware not responding!");
     delay(1000);
   }
 
+  radio.setPALevel(RF24_PA_MIN);
   radio.openWritingPipe(address[0]); // 00001
   radio.openReadingPipe(1, address[1]); // 00002
   radio.setPayloadSize(sizeof(SEND_DATA_STRUCTURE));
   radio.setRetries(0,0);
-  radio.setPALevel(RF24_PA_MIN);
   radio.stopListening();
   //printf_begin();
-  //radio.printPrettyDetails();
+  radio.printPrettyDetails();
 
   printCentered( "Done", 4);
   strip.setPixelColor(3, strip.Color(0, ledBrightness, 0));
@@ -513,7 +505,6 @@ void loop() {
       mydata_send.joy2Z = joy2Z;
 
       // ************************* SEND DATA *********************************
-
       connectionState =  radio.write(&mydata_send, sizeof(SEND_DATA_STRUCTURE));
 
       if(connectionState != prevConnectionState&& mode==NONE) {

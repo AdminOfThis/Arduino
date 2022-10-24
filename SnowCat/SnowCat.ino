@@ -12,6 +12,8 @@
 #include <nRF24L01.h>
 #include <RF24.h>
 
+#include <U8x8lib.h>
+
 #include <Servo.h>
 
 #include <Adafruit_NeoPixel.h>
@@ -20,31 +22,25 @@
 
 #define LED_PIN 2
 
+#define MOTOR_LEFT 4
+#define MOTOR_RIGHT 3
+
+#define DISPLAY_DC 10
+#define DISPLAY_RST 9
+#define DISPLAY_CS 6
+
 #define RADIO_CE 7
 #define RADIO_CSN 8
 
-#define MOTOR_LEFT 5
-#define MOTOR_RIGHT 6
+//Encoder 1 is directly soldered to the Arduino on PIN A0-A2
+#define ENC1_SW A0
+#define ENC1_1 A1
+#define ENC1_2 A2
 
-//************************ END PINS ***********************************
-
-//*********************** CONSTANTS ***********************************
-
-const byte LED_COUNT = 40;
-
-const byte LED_MODES = 2;
-
-const int MOTOR_OFF = 91;
-const int MOTOR_MAX = 175;
-const int MOTOR_MIN = 5;
-const int CENTER = 5;
-
-const uint8_t address[][6] = {"1Node", "2Node"};
-
-//********************* END CONSTANTS *********************************
+//************************ STRUCTS ***********************************
 
 struct RECEIVE_DATA_STRUCTURE{
-//struct __attribute__((__packed__)) SEND_DATA_STRUCTURE{
+  //struct __attribute__((__packed__)) SEND_DATA_STRUCTURE{
   //put your variable definitions here for the data you want to send
   //THIS MUST BE EXACTLY THE SAME ON THE OTHER ARDUINO
 
@@ -78,11 +74,46 @@ struct RECEIVE_DATA_STRUCTURE{
 };
 
 struct SEND_DATA_STRUCTURE{
-  //put your variable definitions here for the data you want to receive
+   //put your variable definitions here for the data you want to receive
   //THIS MUST BE EXACTLY THE SAME ON THE OTHER ARDUINO
   int16_t mode;
   int16_t count;
 };
+
+
+
+//*********************** CONSTANTS ***********************************
+const long STARTUP_DELAY = 1000;
+
+const byte LED_COUNT = 5;
+
+const byte LED_MODES = 2;
+
+const int MOTOR_OFF = 91;
+const int MOTOR_MAX = 175;
+const int MOTOR_MIN = 5;
+const int CENTER = 5;
+
+const uint8_t address[][6] = {"1Node", "2Node"};
+
+//********************** VARIABLES **********************************
+
+bool startup = true;
+
+unsigned long currentMillis;
+long previousMillis = 0;    // set up timers
+unsigned long remoteMillis; //last time I heard from the remote
+
+bool remoteState = false;
+bool remoteStateOld = true;
+
+int ledBrightness = 255;
+
+int posEncoder = 0;
+int posEncoderPrev = 0;
+bool prevEnVal = HIGH;
+bool buttonPressed = LOW;
+bool prevButtonPressed = HIGH;
 
 //*********************** OBJECTS ***********************************
 
@@ -95,53 +126,56 @@ RECEIVE_DATA_STRUCTURE data_prev;
 
 RF24 radio(RADIO_CE, RADIO_CSN); // CE, CSN
 
+U8X8_SSD1306_128X64_NONAME_4W_HW_SPI screen( DISPLAY_CS, DISPLAY_DC, DISPLAY_RST);
+
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 Servo motorLeft;
 Servo motorRight;
 
-//********************** VARIABLES **********************************
 
-unsigned long currentMillis;
-long previousMillis = 0;    // set up timers
-unsigned long remoteMillis; //last time I heard from the remote
-
-bool remoteState;
-bool remoteStateOld;
-
-int ledBrightness = 255;
-int ledMode = 0;
-bool ledRefresh = true;
-int ledCounter = 0;
-unsigned long ledModeDelta = 0;
-unsigned long ledDelta = 0;
-
-//******************** END VARIABLES ********************************
-
+//*******************************************************************
+//*******************************************************************
+//*******************************************************************
 void setup() {
   Serial.begin(115200);
+  
+  pinMode(ENC1_SW, INPUT_PULLUP);
+  pinMode(ENC1_1, INPUT_PULLUP);
+  pinMode(ENC1_2, INPUT_PULLUP);
 
+  screen.begin();
+  screen.setFont(u8x8_font_chroma48medium8_r );  
+
+  
+  
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
+  for(int i=0;i<LED_COUNT;i++) {
+    strip.setPixelColor(i, strip.Color(0, 0, 0));
+  }
   strip.show();            // Turn OFF all pixels ASAP
 
+  startupMessage("Init I/O..." , 4);
+  startupMessage("Init radio..." , 3);
+
   while (!radio.begin()) {
-    Serial.println("Radio hardware not responding!");
+    screen.clear();
+    screen.drawString(0,3, "Radio error!");
+    strip.setPixelColor(3, strip.Color(ledBrightness, 0, 0));
+    strip.show();
     delay(500);
   }
 
-  Serial.println("RADIO CONNECTED");
-  Serial.println("STARTING AS RECEIVER");
-
+  startupMessage("Init receiver..." , 2);
+   
   radio.openWritingPipe(address[1]); // 00001
   radio.openReadingPipe(1, address[0]); // 00002
   radio.setPayloadSize(sizeof(RECEIVE_DATA_STRUCTURE));
-  //radio.setChannel(112);
+  //radio.setAutoAck(true);
   radio.setPALevel(RF24_PA_MIN);
   radio.startListening();
-  //printf_begin();
-  //radio.printPrettyDetails();
-
-  Serial.println("STARTING MOTORS");
+  printf_begin();
+  radio.printPrettyDetails();
 
   motorLeft.attach(MOTOR_LEFT);
   motorRight.attach(MOTOR_RIGHT);
@@ -149,39 +183,72 @@ void setup() {
   motorLeft.write(30);
   motorRight.write(30);
 
-  Serial.println("STARTUP COMPLETE");
-
+  startupMessage("Init motors" , 1);
+  
+  startupMessage("Startup done" , 0);
+  startupMessage("" , -1);
+  
 }
+
 
 void loop() {
 
   currentMillis = millis();
-  if (currentMillis - previousMillis >= 10) {  // start timed event
 
+  readEncoder(posEncoder, digitalRead(ENC1_2), digitalRead(ENC1_1), prevEnVal);
+  
+  if (currentMillis - previousMillis >= 10) {  // start timed event
   if (radio.available()) { //try to receive data
-    remoteMillis = currentMillis;
+     remoteMillis = currentMillis;
      data_prev = data_remote;
      radio.read(&data_remote, sizeof(RECEIVE_DATA_STRUCTURE));
      remoteMillis = currentMillis;
   }
 
    // is the remote disconnected for too long ?
-    if (currentMillis - remoteMillis > 500) {
+    if (currentMillis - remoteMillis > 100) {
       remoteState = false;
     }
     else {
       remoteState = true;
     }
 
+    if(startup) {
+      remoteState = false;
+      remoteStateOld = true;
+      startup = false;
+    }
+
     // if disconnected
-    if (!remoteState) {         
-      Serial.println("Disconnected");
+    if (!remoteState && remoteStateOld) {      
+      remoteStateOld = remoteState;         
+      //Serial.println("Disconnected");
       motorLeft.write(MOTOR_OFF);
       motorRight.write(MOTOR_OFF);
-    } else {
+
+      screen.clear();
+      screen.drawString(0, 3, "  DISCONNECTED");
+
+      for(int i=0;i<LED_COUNT;i++) {
+        strip.setPixelColor(i, strip.Color(ledBrightness, 0, 0));
+      }
+      strip.show(); 
+      
+    } else if(remoteState){
+
+      if(remoteState && !remoteStateOld) {
+        remoteStateOld = remoteState;
+        
+        screen.clear();
+        screen.drawString(0, 3, "   CONNECTED");  
+        
+        for(int i=0;i<LED_COUNT;i++) {
+          strip.setPixelColor(i, strip.Color(0, ledBrightness, 0));
+        }
+        strip.show(); 
+      }
 
       // MOTORS
-  
       if(data_remote.tgl6) {
          motorLeft.write(MOTOR_OFF);
          motorRight.write(MOTOR_OFF);
@@ -197,7 +264,7 @@ void loop() {
         double motorR = max(-512, min(512, y1 - min(0,x1) + z1));
          
         motorL = map(motorL, -512, 512, MOTOR_MIN, MOTOR_MAX);
-        motorR = map(motorR, -512, 512, MOTOR_MIN, MOTOR_MAX);
+        motorR = map(motorR, -512, 512, MOTOR_MIN, MOTOR_MAX );
 
        if(abs((180/2)-motorL)<CENTER) {
           motorL = MOTOR_OFF;
@@ -209,71 +276,32 @@ void loop() {
         motorLeft.write(motorL);
         motorRight.write(motorR);
       }
-
-      // LEDS
-      //if mode changed or toggle changed
-      if((data_remote.encSw4 && !data_prev.encSw4 && ledModeDelta+100<=millis()) || (!data_remote.tgl1 && data_prev.tgl1)) {
-        ledModeDelta = millis();
-        ledRefresh = true;
-        ledBrightness = 255;
-        ledMode=(ledMode+1)%LED_MODES;
-        Serial.print("LED_MODE  ");
-        Serial.println(ledMode);
-      }
-
-      if(data_remote.tgl1&&!data_prev.tgl1 || ledRefresh) {
-         for(int i= 0;i<LED_COUNT;i++) {
-            strip.setPixelColor(i, strip.Color(0, 0, 0));
-         }
-         strip.show();
-         Serial.println("LEDS OFF");
-      } 
-      if(!data_remote.tgl1) {
-        int t = max(10, min(1000, (data_remote.encVal3*10)));
-        switch(ledMode) {
-          case 0:
-            if(data_remote.encVal2 !=data_prev.encVal2 || ledRefresh) {
-              for(int i= 0;i<LED_COUNT;i++) {
-                strip.setPixelColor(i, Wheel((data_remote.encVal2*5)%255));
-              }
-              strip.show();
-            }
-          break;
-          case 1:
-            if(ledDelta+t<=millis()) {
-              ledDelta = millis();
-              strip.setPixelColor(ledCounter, 0);
-              strip.setPixelColor((ledCounter+1)%LED_COUNT, 0);
-              strip.setPixelColor(((ledCounter+(LED_COUNT/2))%LED_COUNT), 0);
-              strip.setPixelColor(((ledCounter+1+(LED_COUNT/2))%LED_COUNT), 0);
-              ledCounter= (ledCounter+1)%LED_COUNT;
-              strip.setPixelColor(ledCounter, Wheel((data_remote.encVal2*5)%255));
-              strip.setPixelColor((ledCounter+1)%LED_COUNT, Wheel((data_remote.encVal2*5)%255));
-             strip.setPixelColor(((ledCounter+(LED_COUNT/2))%LED_COUNT), Wheel((data_remote.encVal2*5)%255));
-              strip.setPixelColor(((ledCounter+1+(LED_COUNT/2))%LED_COUNT), Wheel((data_remote.encVal2*5)%255));
-              strip.show();
-            }
-          break;
-        }
-        ledRefresh = false;
-      }        
     }
   } //end of timed loop
   
 } //end of main loop
 
-// Input a value 0 to 255 to get a color value.
-// The colours are a transition r - g - b - back to r.
-uint32_t Wheel(byte WheelPos) {
-  if(WheelPos < 85) {
-    return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
-  } 
-  else if(WheelPos < 170) {
-    WheelPos -= 85;
-    return strip.Color(255 - WheelPos * 3, 0, WheelPos * 3);
-  } 
-  else {
-    WheelPos -= 170;
-    return strip.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+void startupMessage(char* message, int ledPin) {
+  screen.clear();
+  screen.drawString(0 ,3 , message);
+  
+  strip.setPixelColor(ledPin, strip.Color(0, 0, ledBrightness));
+  if(ledPin<=4) {
+    strip.setPixelColor(ledPin+1, strip.Color(0, ledBrightness, 0));
   }
+  
+  strip.show();
+  long t = millis();
+  while(t+STARTUP_DELAY>millis()&&digitalRead(ENC1_SW)) { } //delay, but shortcut with button
+}
+
+void readEncoder(int& val, bool val1, bool val2, bool& valAPrev) {
+  if ((valAPrev == HIGH) && (val1 == LOW)) {
+    if (val2 == HIGH) {
+      val = max(-999, val-1);      
+    } else {
+      val = min(999, val+1);
+    }
+  }
+  valAPrev = val1;
 }

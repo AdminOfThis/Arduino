@@ -50,14 +50,19 @@ void setup() {
   Serial.println("Starting LoopPedal v1.0");
 }
 
+int i=0;
+
 void loop() {
 
-    checkButtons();
-
-    readMIDI();
-
-    manageLEDs();
-    
+  i=(i+1)%8;
+  
+  for(int j=0;j<40;j++) {
+    Serial.print("SEND ");
+    Serial.println(i);
+    noteOn(0x90,j,i);
+  }
+    MidiUSB.flush();
+    delay(5000);    
 }
 
 void checkButtons() {

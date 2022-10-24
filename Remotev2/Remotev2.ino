@@ -86,6 +86,7 @@ enum DISPLAY_MODE
 enum INPUT_MODE
 {
   MENU,
+  DATA,
   INPUT_INTEGER
 };
 
