@@ -64,7 +64,7 @@ bool play = false;
 
 Adafruit_NeoPixel LED(LED_COUNT *LED_RINGS, PIN_LED, NEO_GRB + NEO_KHZ800);
 int color[LED_RINGS][3];
-LED_MODE ledmode[LED_RINGS];
+LED_MODE ledMode[LED_RINGS];
 
 uint8_t pixel = 0;
 long lastPixelChange = 0;
@@ -79,6 +79,10 @@ long lastTimedChange = 0;
 
 // *************************************** MIDI VARIABLES ***********************************************
 
+bool modeRec = true;
+int selectedChannel = 0;
+
+bool chnState[4] = {HIGH, HIGH, HIGH, HIGH};
 bool fxState[4];
 
 void setup()
@@ -98,15 +102,23 @@ void setup()
   startupLEDs();
 
   // BANK Button
+  fillColor(0, COLOR_YELLOW);
+  ledMode[0] = ON;
   // CLR button
   fillColor(1, COLOR_RED);
-  ledmode[1] = BLINK;
+  ledMode[1] = BLINK;
   // REC/PLAY Button
   fillColor(2, COLOR_GREEN);
-  ledmode[2] = ON;
+  ledMode[2] = ON;
   // STOP button
   fillColor(3, COLOR_RED);
-  ledmode[3] = ON;
+  ledMode[3] = ON;
+  // UNDO button
+  fillColor(4, COLOR_YELLOW);
+  ledMode[4] = ON;
+  // MODE button
+  fillColor(5, COLOR_RED);
+  ledMode[5] = ON;
 
   // FX Buttons
   fillColor(10, COLOR_BLUE);
@@ -127,25 +139,69 @@ void loop()
   // Buttons
   checkButtons();
 
+  // mode Button
+  if (buttonPushed[5])
+  {
+    modeRec = !modeRec;
+  }
+
+  // chn Buttons
+  for (int i = 0; i < 4; i++)
+  {
+
+    if (buttonPushed[i + 6])
+    {
+      if (modeRec)
+      {
+        selectedChannel = i;
+      }
+      else
+      {
+        chnState[i] = !chnState[i];
+      }
+    }
+  }
+
   // fx buttons
   for (int i = 0; i < 4; i++)
   {
     if (buttonPushed[i + 10])
     {
       fxState[i] = !fxState[i];
-      ledmode[i + 10] = fxState[i] ? ON : OFF;
     }
+  }
+
+  // ********************************** Lighting handling *******************************************
+
+  if (modeRec) // mode rec
+  {
+    fillColor(5, COLOR_RED);
+    for (int i = 6; i < 10; i++)
+    {
+      fillColor(i, COLOR_RED);
+      ledMode[i] = (selectedChannel + 6 == i) ? ON : OFF;
+    }
+  }
+  else // mode play
+  {
+    fillColor(5, COLOR_GREEN);
+    for (int i = 6; i < 10; i++)
+    {
+      fillColor(i, COLOR_GREEN);
+      ledMode[i] = (chnState[i - 6]) ? ON : OFF;
+    }
+  }
+
+  // fx buttons
+  for (int i = 0; i < 4; i++)
+  {
+    ledMode[i + 10] = fxState[i] ? ON : OFF;
   }
 
   // ********************************************* Timed Loop ********************************************************************
   if ((time - (TIMED_LOOP_DELTA)) > lastTimedChange)
   {
     lastTimedChange = time; // reset timed loop
-
-    // for (int i = 0; i < LED_RINGS; i++) // DEBUG CODE
-    // {
-    //   ledmode[i] = buttonState[i] ? ON : OFF;
-    // }
 
     manageLEDs(); // update LED pattern
     readMIDI();   // read incoming MIDI signals
@@ -209,7 +265,7 @@ void manageLEDs()
 {
   for (int i = 0; i < LED_RINGS; i++)
   {
-    switch (ledmode[i])
+    switch (ledMode[i])
     {
     case OFF:
       showColor(i, COLOR_OFF, false);
