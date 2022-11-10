@@ -1,15 +1,48 @@
+#include <SPI.h>
+#include <Wire.h>
+
 #include "MIDIUSB.h"
 #include <Adafruit_NeoPixel.h>
 
-#define REC_BUTTON 4 // Recording Button is on D4
-#define PLAY_BUTTON 5 
+#include <U8x8lib.h>
 
-#define REC_RING 6 //Pin of the LED REC_RING
-#define PLAY_RING 7
+#define PIN_LED 4 // Pin of the LED REC_RING
 
-#define LEDS 8
+#define PIN_BANK 5
+#define PIN_CLR 6
 
-#define DEBOUNCE 10 //Debounce of 50ms
+#define PIN_REC 7
+#define PIN_STOP 8
+
+#define PIN_UNDO 9
+#define PIN_MODE 10
+
+#define PIN_CH1 11
+#define PIN_CH2 12
+#define PIN_CH3 A0
+#define PIN_CH4 A1
+
+#define PIN_FX1 A5
+#define PIN_FX2 A4
+#define PIN_FX3 A3
+#define PIN_FX4 A2
+
+#define LED_RINGS 14 // Number of LED rings
+#define LED_COUNT 8  // Number of LEDs per ring
+
+#define DEBOUNCE 10 // Debounce of 50ms
+#define LED_DELTATIME 200
+
+#define TIMED_LOOP_DELTA 100
+
+int COLOR_OFF[3] = {0, 0, 0};
+
+enum LED_MODE
+{
+  OFF,
+  ON,
+  SPINNING
+};
 
 // MIDI SIGNALS
 #define REC 1
@@ -18,11 +51,14 @@
 bool record = false;
 bool play = false;
 
-Adafruit_NeoPixel REC_STRIP(LEDS, REC_RING, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel PLAY_STRIP(LEDS, PLAY_RING, NEO_GRB + NEO_KHZ800);
+// U8X8_SSD1309_128X64_NONAME0_4W_HW_SPI screen(OLED_CS, OLED_DC, OLED_RESET);
+
+Adafruit_NeoPixel LED(LED_COUNT *LED_RINGS, PIN_LED, NEO_GRB + NEO_KHZ800);
+int color[LED_RINGS][3];
+LED_MODE ledmode[LED_RINGS];
+
 uint8_t pixel = 0;
-long t = 0;
-int color[] ={0,0,0};
+long lastPixelChange = 0;
 
 bool REC_prevState = LOW;
 long REC_lastChange = 0;
@@ -30,157 +66,249 @@ long REC_lastChange = 0;
 bool PLAY_prevState = LOW;
 long PLAY_lastChange = 0;
 
-void setup() {
-   
-  //initialize Buttons
-  
-  pinMode(REC_BUTTON, INPUT_PULLUP);
-  pinMode(PLAY_BUTTON, INPUT_PULLUP);
-  
-  REC_STRIP.begin();
-  REC_STRIP.show();
+long time = 0;
+long lastTimedChange = 0;
 
-  PLAY_STRIP.begin();
-  PLAY_STRIP.show();
-  
+void setup()
+{
   Serial.begin(115200);
+  Serial.println("Starting LoopPedal v1.0");
 
+  // initialize Buttons
+  pinMode(PIN_BANK, INPUT_PULLUP);
+  pinMode(PIN_CLR, INPUT_PULLUP);
+
+  pinMode(PIN_REC, INPUT_PULLUP);
+  pinMode(PIN_STOP, INPUT_PULLUP);
+
+  pinMode(PIN_UNDO, INPUT_PULLUP);
+  pinMode(PIN_MODE, INPUT_PULLUP);
+
+  pinMode(PIN_CH1, INPUT_PULLUP);
+  pinMode(PIN_CH2, INPUT_PULLUP);
+  pinMode(PIN_CH3, INPUT_PULLUP);
+  pinMode(PIN_CH4, INPUT_PULLUP);
+
+  pinMode(PIN_FX1, INPUT_PULLUP);
+  pinMode(PIN_FX2, INPUT_PULLUP);
+  pinMode(PIN_FX3, INPUT_PULLUP);
+  pinMode(PIN_FX4, INPUT_PULLUP);
+
+  // initialize LED
+  LED.begin();
+  for (int i = 0; i < LED_COUNT; i++)
+  {
+    for (int j = 0; j < LED_RINGS; j++)
+    {
+      for (int k = 0; k <= i; k++)
+      {
+        LED.setPixelColor((j * LED_COUNT) + k, LED.Color(255 / LED_COUNT * i, 164 / LED_COUNT * i, 255 - (255 / LED_COUNT * i)));
+      }
+    }
+    LED.show();
+    delay(1000 / LED_COUNT);
+  }
   delay(1000);
 
-  Serial.println("Starting LoopPedal v1.0");
+  // screen.begin(); // initialite display
+  // screen.setContrast(255);
+  // screen.setFont(u8x8_font_8x13_1x2_f); // select font
+  // screen.drawString(4,4, "Hello, World");
 }
 
-void loop() {
+void loop()
+{
 
-    checkButtons();
+  time = millis();
 
-    readMIDI();
-
-    manageLEDs();
-    
-}
-
-void checkButtons() {
-  bool REC_state = !digitalRead(REC_BUTTON);
-  
-  if(REC_state != REC_prevState && REC_lastChange+DEBOUNCE<=millis()) {
-
-      if(REC_state) {
-        noteOn(0, 93, 127);
-      } else {
-        noteOff(0, 93, 127);
-      }
-       MidiUSB.flush();
-      
-      REC_prevState = REC_state;
-      REC_lastChange = millis();
-
-      Serial.println("REC_BUTTON");
+  if (!digitalRead(PIN_CLR))
+  {
+    randomSeed(millis());
+    for (int i = 0; i < LED_RINGS; i++)
+    {
+      // ledmode[i] = OFF;
+      ledmode[i] = (LED_MODE)random(3);
+      color[i][0] = random(255);
+      color[i][1] = random(255);
+      color[i][2] = random(255);
     }
-
-    bool PLAY_state = !digitalRead(PLAY_BUTTON);
-    if(PLAY_state != PLAY_prevState && PLAY_lastChange+DEBOUNCE<=millis()) {
-  if(play) {
-      if(PLAY_state) {
-        noteOn(0, 91, 127);
-      } else {
-        noteOff(0, 91, 127);
-      }
-
-      Serial.println("PLAY_BUTTON");
-  } else {
-    if(PLAY_state) {
-        noteOn(0, 92, 127);
-      } else {
-        noteOff(0, 92, 127);
-      }
   }
-       MidiUSB.flush();
-      
-      PLAY_prevState = PLAY_state;
-      PLAY_lastChange = millis();
 
-      Serial.println("PLAY/STOP_BUTTON");
-    }
-}
-
-void manageLEDs() {
-  if(t+150<millis()) {  
-    
-    t = millis();
-
-    turnOffLED(REC_STRIP);
-    turnOffLED(PLAY_STRIP);
-    
-    if(record) {
-      REC_STRIP.setPixelColor((pixel)%LEDS, 255,0,0);
-      REC_STRIP.setPixelColor((pixel+LEDS/2)%LEDS, 255,0,0);
-      REC_STRIP.show();
-    }
-
-    if(play) {
-      PLAY_STRIP.setPixelColor(pixel, 0, 255, 0);
-      PLAY_STRIP.setPixelColor((pixel+LEDS/2)%LEDS, 0, 255, 0);
-      PLAY_STRIP.show();
-    }
- 
-    pixel = (pixel+1)%LEDS;
-    
-    }
-}
-
-void turnOffLED(Adafruit_NeoPixel& strip) {
-  for(int i=0;i<LEDS;i++) {
-     strip.setPixelColor(i, 0, 0, 0);
+  // ********************************************* Timed Loop ********************************************************************
+  if ((time - (TIMED_LOOP_DELTA)) > lastTimedChange)
+  {
+    lastTimedChange = time; // reset timed loop
+    manageLEDs();           // update LED pattern
+    readMIDI();             // read incoming MIDI signals
   }
-  strip.show();
+  // ********************************************* End Timed Loop ********************************************************************
+
+  // LED delay counter
+  if ((time - (LED_DELTATIME)) > lastPixelChange)
+  {
+    lastPixelChange = time;                // reset led rollover timer
+    pixel = (pixel + 1) % (LED_COUNT / 2); // rollover LED index
+  }
 }
 
-void turnOffLED(Adafruit_NeoPixel& strip, int i) {
-  strip.setPixelColor(i, 0, 0, 0);
-  strip.show();
+void manageLEDs()
+{
+  for (int i = 0; i < LED_RINGS; i++)
+  {
+    switch (ledmode[i])
+    {
+    case OFF:
+      showColor(i, COLOR_OFF, false);
+      break;
+    case ON:
+      showColor(i, color[i], false);
+      break;
+    case SPINNING:
+      spin(i);
+      break;
+    }
+  }
+  LED.show();
 }
 
-void readMIDI() {
+void spin(int ringIndex)
+{
+  for (int i = 0; i < LED_COUNT; i++)
+  {
+
+    if (i == pixel || i == pixel + 4) // main pixel
+    {
+      LED.setPixelColor(ringIndex * LED_COUNT + i, LED.Color(color[ringIndex][0], color[ringIndex][1], color[ringIndex][2]));
+    }
+    else if (i == ((pixel + LED_COUNT) - 1) % LED_COUNT || i == ((pixel + 4 + LED_COUNT) - 1) % LED_COUNT) // tail pixel
+    {
+      LED.setPixelColor(ringIndex * LED_COUNT + i, LED.Color(color[ringIndex][0] / 6, color[ringIndex][1] / 6, color[ringIndex][2] / 6));
+    }
+    else
+    {
+      LED.setPixelColor(ringIndex * LED_COUNT + i, LED.Color(0, 0, 0));
+    }
+  }
+}
+
+void showColor(int ringIndex, int color[3], bool show)
+{
+  if (ringIndex < 0 || ringIndex >= LED_RINGS)
+  {
+    return;
+  }
+  for (int i = ringIndex * LED_COUNT; i < (ringIndex + 1) * LED_COUNT; i++)
+  {
+    LED.setPixelColor(i, LED.Color(color[0], color[1], color[2]));
+  }
+  if (show)
+  {
+    LED.show();
+  }
+}
+
+// void checkButtons()
+// {
+//   bool REC_state = !digitalRead(REC_BUTTON);
+
+//   if (REC_state != REC_prevState && REC_lastChange + DEBOUNCE <= millis())
+//   {
+
+//     if (REC_state)
+//     {
+//       noteOn(0, 93, 127);
+//     }
+//     else
+//     {
+//       noteOff(0, 93, 127);
+//     }
+//     MidiUSB.flush();
+
+//     REC_prevState = REC_state;
+//     REC_lastChange = millis();
+
+//     Serial.println("REC_BUTTON");
+//   }
+
+//   bool PLAY_state = !digitalRead(PLAY_BUTTON);
+//   if (PLAY_state != PLAY_prevState && PLAY_lastChange + DEBOUNCE <= millis())
+//   {
+//     if (play)
+//     {
+//       if (PLAY_state)
+//       {
+//         noteOn(0, 91, 127);
+//       }
+//       else
+//       {
+//         noteOff(0, 91, 127);
+//       }
+
+//       Serial.println("PLAY_BUTTON");
+//     }
+//     else
+//     {
+//       if (PLAY_state)
+//       {
+//         noteOn(0, 92, 127);
+//       }
+//       else
+//       {
+//         noteOff(0, 92, 127);
+//       }
+//     }
+//     MidiUSB.flush();
+
+//     PLAY_prevState = PLAY_state;
+//     PLAY_lastChange = millis();
+
+//     Serial.println("PLAY/STOP_BUTTON");
+//   }
+// }
+
+void readMIDI()
+{
   midiEventPacket_t rx = MidiUSB.read();
-  
-    if (rx.header != 0) {
-      
-      Serial.print(rx.header);
-      Serial.print(" , ");
-      Serial.print(rx.byte1);
-      Serial.print(" , ");
-      Serial.print(rx.byte2);
-      Serial.print(" , ");
-      Serial.print(rx.byte3);
-      Serial.println(" , ");
-      
 
-      
-      if(rx.header = 0xB && rx.byte1 == 0xB0) {
-        switch(rx.byte2) {
-          case REC:
-            record = rx.byte3 == 0x7F;
-            //Serial.println("RECORD " + record);
-          break;
-          case PLAY_STOP:
-            play = rx.byte3 == 0x7F;
-          break;
-          default:
-            Serial.print("Received unknown: ");
-            Serial.print(rx.header, HEX);
-            Serial.print("-");
-            Serial.print(rx.byte1, HEX);
-            Serial.print("-");
-            Serial.print(rx.byte2, HEX);
-            Serial.print("-");
-            Serial.println(rx.byte3, HEX);
-        }
+  if (rx.header != 0)
+  {
+
+    Serial.print(rx.header);
+    Serial.print(" , ");
+    Serial.print(rx.byte1);
+    Serial.print(" , ");
+    Serial.print(rx.byte2);
+    Serial.print(" , ");
+    Serial.print(rx.byte3);
+    Serial.println(" , ");
+
+    if (rx.header = 0xB && rx.byte1 == 0xB0)
+    {
+      switch (rx.byte2)
+      {
+      case REC:
+        record = rx.byte3 == 0x7F;
+        // Serial.println("RECORD " + record);
+        break;
+      case PLAY_STOP:
+        play = rx.byte3 == 0x7F;
+        break;
+      default:
+        Serial.print("Received unknown: ");
+        Serial.print(rx.header, HEX);
+        Serial.print("-");
+        Serial.print(rx.byte1, HEX);
+        Serial.print("-");
+        Serial.print(rx.byte2, HEX);
+        Serial.print("-");
+        Serial.println(rx.byte3, HEX);
       }
     }
+  }
 }
 
-bool equal (midiEventPacket_t t1, midiEventPacket_t t2) {
+bool equal(midiEventPacket_t t1, midiEventPacket_t t2)
+{
   return t1.header == t2.header && t1.byte1 == t2.byte1 && t1.byte2 == t2.byte2 && t1.byte3 == t2.byte3;
 }
 
@@ -190,14 +318,16 @@ bool equal (midiEventPacket_t t1, midiEventPacket_t t2) {
 // Third parameter is the note number (48 = middle C).
 // Fourth parameter is the velocity (64 = normal, 127 = fastest).
 
-void noteOn(byte channel, byte pitch, byte velocity) {
+void noteOn(byte channel, byte pitch, byte velocity)
+{
 
   midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
 
   MidiUSB.sendMIDI(noteOn);
 }
 
-void noteOff(byte channel, byte pitch, byte velocity) {
+void noteOff(byte channel, byte pitch, byte velocity)
+{
 
   midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
 

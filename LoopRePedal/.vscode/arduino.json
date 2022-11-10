@@ -1,0 +1,7 @@
+{
+    "sketch": "LoopRePedal.ino",
+    "board": "arduino:avr:micro",
+    "programmer": "arduino:arduinoasisp",
+    "output": "build",
+    "port": "COM7"
+}
