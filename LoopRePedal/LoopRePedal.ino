@@ -46,12 +46,15 @@ const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, 
 int COLOR_OFF[3] = {0, 0, 0};
 int COLOR_GREEN[3] = {0, 255, 0};
 int COLOR_RED[3] = {255, 0, 0};
+int COLOR_BLUE[3] = {0, 0, 255};
+int COLOR_YELLOW[3] = {255, 255, 0};
 
 enum LED_MODE
 {
   OFF,
   ON,
-  SPINNING
+  SPINNING,
+  BLINK
 };
 
 bool record = false;
@@ -67,11 +70,16 @@ uint8_t pixel = 0;
 long lastPixelChange = 0;
 
 bool buttonState[LED_RINGS];
+bool buttonPushed[LED_RINGS];
 bool prevButtonState[LED_RINGS];
 long lastButtonChange[LED_RINGS];
 
 long time = 0;
 long lastTimedChange = 0;
+
+// *************************************** MIDI VARIABLES ***********************************************
+
+bool fxState[4];
 
 void setup()
 {
@@ -87,27 +95,24 @@ void setup()
   // initialize LED
   LED.begin();
   LED.setBrightness(BRIGHTNESS);
-  for (int i = 0; i < LED_COUNT; i++)
-  {
-    for (int j = 0; j < LED_RINGS; j++)
-    {
-      for (int k = 0; k <= i; k++)
-      {
-        LED.setPixelColor((j * LED_COUNT) + k, LED.Color(255 / LED_COUNT * i, 164 / LED_COUNT * i, 255 - (255 / LED_COUNT * i)));
-      }
-    }
-    LED.show();
-    delay(1000 / LED_COUNT);
-  }
-  delay(1000);
+  startupLEDs();
 
-  for (int i = 0; i < LED_RINGS; i++)
-  {
-    ledmode[i] = OFF;
-    color[i][0] = COLOR_GREEN[0];
-    color[i][1] = COLOR_GREEN[1];
-    color[i][2] = COLOR_GREEN[2];
-  }
+  // BANK Button
+  // CLR button
+  fillColor(1, COLOR_RED);
+  ledmode[1] = BLINK;
+  // REC/PLAY Button
+  fillColor(2, COLOR_GREEN);
+  ledmode[2] = ON;
+  // STOP button
+  fillColor(3, COLOR_RED);
+  ledmode[3] = ON;
+
+  // FX Buttons
+  fillColor(10, COLOR_BLUE);
+  fillColor(11, COLOR_BLUE);
+  fillColor(12, COLOR_BLUE);
+  fillColor(13, COLOR_BLUE);
 
   // screen.begin(); // initialite display
   // screen.setContrast(255);
@@ -117,31 +122,48 @@ void setup()
 
 void loop()
 {
-
   time = millis();
 
+  // Buttons
   checkButtons();
+
+  // fx buttons
+  for (int i = 0; i < 4; i++)
+  {
+    if (buttonPushed[i + 10])
+    {
+      fxState[i] = !fxState[i];
+      ledmode[i + 10] = fxState[i] ? ON : OFF;
+    }
+  }
 
   // ********************************************* Timed Loop ********************************************************************
   if ((time - (TIMED_LOOP_DELTA)) > lastTimedChange)
   {
     lastTimedChange = time; // reset timed loop
 
-    for (int i = 0; i < LED_RINGS; i++) // DEBUG CODE
-    {
-      ledmode[i] = buttonState[i] ? ON : OFF;
-    }
+    // for (int i = 0; i < LED_RINGS; i++) // DEBUG CODE
+    // {
+    //   ledmode[i] = buttonState[i] ? ON : OFF;
+    // }
 
     manageLEDs(); // update LED pattern
     readMIDI();   // read incoming MIDI signals
   }
   // ********************************************* End Timed Loop ********************************************************************
 
-  // LED delay counter
-  if ((time - (LED_DELTATIME)) > lastPixelChange)
+  if ((time - (LED_DELTATIME)) > lastPixelChange) // LED delay counter
   {
     lastPixelChange = time;                // reset led rollover timer
     pixel = (pixel + 1) % (LED_COUNT / 2); // rollover LED index
+  }
+}
+
+void fillColor(int target, int source[3])
+{
+  for (int i = 0; i < 3; i++)
+  {
+    color[target][i] = source[i];
   }
 }
 
@@ -149,7 +171,7 @@ void checkButtons()
 {
   for (int i = 0; i < LED_RINGS; i++)
   {
-
+    buttonPushed[i] = LOW;
     // read the state of the switch into a local variable:
     bool state = !digitalRead(BUTTONS_PINS[i]); // read rawSignal
 
@@ -173,6 +195,10 @@ void checkButtons()
       if (state != buttonState[i])
       {
         buttonState[i] = state;
+        if (buttonState[i])
+        {
+          buttonPushed[i] = HIGH;
+        }
       }
     }
     prevButtonState[i] = state;
@@ -193,6 +219,9 @@ void manageLEDs()
       break;
     case SPINNING:
       spin(i);
+      break;
+    case BLINK:
+      showColor(i, ((pixel < 2) ? COLOR_OFF : color[i]), false);
       break;
     }
   }
@@ -360,4 +389,25 @@ void noteOff(byte channel, byte pitch, byte velocity)
   midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
 
   MidiUSB.sendMIDI(noteOff);
+}
+
+void startupLEDs()
+{
+  for (int i = 0; i < LED_COUNT; i++)
+  {
+    for (int j = 0; j < LED_RINGS; j++)
+    {
+      for (int k = 0; k <= i; k++)
+      {
+        LED.setPixelColor((j * LED_COUNT) + k, LED.Color(255 / LED_COUNT * i, 164 / LED_COUNT * i, 255 - (255 / LED_COUNT * i)));
+      }
+    }
+    LED.show();
+    delay(1000 / LED_COUNT);
+  }
+  delay(1000);
+  for (int i = 0; i < LED_RINGS; i++) // just as backup, fill with default green color
+  {
+    fillColor(color[i], COLOR_GREEN);
+  }
 }
