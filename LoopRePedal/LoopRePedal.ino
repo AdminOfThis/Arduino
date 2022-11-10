@@ -22,20 +22,30 @@
 #define PIN_CH3 A0
 #define PIN_CH4 A1
 
-#define PIN_FX1 A5
-#define PIN_FX2 A4
-#define PIN_FX3 A3
-#define PIN_FX4 A2
+#define PIN_FX1 A2
+#define PIN_FX2 A3
+#define PIN_FX3 A4
+#define PIN_FX4 A5
+
+const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, PIN_MODE, PIN_CH1, PIN_CH2, PIN_CH3, PIN_CH4, PIN_FX1, PIN_FX2, PIN_FX3, PIN_FX4};
 
 #define LED_RINGS 14 // Number of LED rings
 #define LED_COUNT 8  // Number of LEDs per ring
 
-#define DEBOUNCE 10 // Debounce of 50ms
+#define DEBOUNCE 10 // Debounce of 10ms
 #define LED_DELTATIME 200
 
 #define TIMED_LOOP_DELTA 100
 
+// MIDI SIGNALS
+#define REC 1
+#define PLAY_STOP 2
+
+#define BRIGHTNESS 63
+
 int COLOR_OFF[3] = {0, 0, 0};
+int COLOR_GREEN[3] = {0, 255, 0};
+int COLOR_RED[3] = {255, 0, 0};
 
 enum LED_MODE
 {
@@ -43,10 +53,6 @@ enum LED_MODE
   ON,
   SPINNING
 };
-
-// MIDI SIGNALS
-#define REC 1
-#define PLAY_STOP 2
 
 bool record = false;
 bool play = false;
@@ -60,11 +66,9 @@ LED_MODE ledmode[LED_RINGS];
 uint8_t pixel = 0;
 long lastPixelChange = 0;
 
-bool REC_prevState = LOW;
-long REC_lastChange = 0;
-
-bool PLAY_prevState = LOW;
-long PLAY_lastChange = 0;
+bool buttonState[LED_RINGS];
+bool prevButtonState[LED_RINGS];
+long lastButtonChange[LED_RINGS];
 
 long time = 0;
 long lastTimedChange = 0;
@@ -75,27 +79,14 @@ void setup()
   Serial.println("Starting LoopPedal v1.0");
 
   // initialize Buttons
-  pinMode(PIN_BANK, INPUT_PULLUP);
-  pinMode(PIN_CLR, INPUT_PULLUP);
-
-  pinMode(PIN_REC, INPUT_PULLUP);
-  pinMode(PIN_STOP, INPUT_PULLUP);
-
-  pinMode(PIN_UNDO, INPUT_PULLUP);
-  pinMode(PIN_MODE, INPUT_PULLUP);
-
-  pinMode(PIN_CH1, INPUT_PULLUP);
-  pinMode(PIN_CH2, INPUT_PULLUP);
-  pinMode(PIN_CH3, INPUT_PULLUP);
-  pinMode(PIN_CH4, INPUT_PULLUP);
-
-  pinMode(PIN_FX1, INPUT_PULLUP);
-  pinMode(PIN_FX2, INPUT_PULLUP);
-  pinMode(PIN_FX3, INPUT_PULLUP);
-  pinMode(PIN_FX4, INPUT_PULLUP);
+  for (int i = 0; i < LED_RINGS; i++)
+  {
+    pinMode(BUTTONS_PINS[i], INPUT_PULLUP);
+  }
 
   // initialize LED
   LED.begin();
+  LED.setBrightness(BRIGHTNESS);
   for (int i = 0; i < LED_COUNT; i++)
   {
     for (int j = 0; j < LED_RINGS; j++)
@@ -110,6 +101,14 @@ void setup()
   }
   delay(1000);
 
+  for (int i = 0; i < LED_RINGS; i++)
+  {
+    ledmode[i] = OFF;
+    color[i][0] = COLOR_GREEN[0];
+    color[i][1] = COLOR_GREEN[1];
+    color[i][2] = COLOR_GREEN[2];
+  }
+
   // screen.begin(); // initialite display
   // screen.setContrast(255);
   // screen.setFont(u8x8_font_8x13_1x2_f); // select font
@@ -121,25 +120,20 @@ void loop()
 
   time = millis();
 
-  if (!digitalRead(PIN_CLR))
-  {
-    randomSeed(millis());
-    for (int i = 0; i < LED_RINGS; i++)
-    {
-      // ledmode[i] = OFF;
-      ledmode[i] = (LED_MODE)random(3);
-      color[i][0] = random(255);
-      color[i][1] = random(255);
-      color[i][2] = random(255);
-    }
-  }
+  checkButtons();
 
   // ********************************************* Timed Loop ********************************************************************
   if ((time - (TIMED_LOOP_DELTA)) > lastTimedChange)
   {
     lastTimedChange = time; // reset timed loop
-    manageLEDs();           // update LED pattern
-    readMIDI();             // read incoming MIDI signals
+
+    for (int i = 0; i < LED_RINGS; i++) // DEBUG CODE
+    {
+      ledmode[i] = buttonState[i] ? ON : OFF;
+    }
+
+    manageLEDs(); // update LED pattern
+    readMIDI();   // read incoming MIDI signals
   }
   // ********************************************* End Timed Loop ********************************************************************
 
@@ -148,6 +142,40 @@ void loop()
   {
     lastPixelChange = time;                // reset led rollover timer
     pixel = (pixel + 1) % (LED_COUNT / 2); // rollover LED index
+  }
+}
+
+void checkButtons()
+{
+  for (int i = 0; i < LED_RINGS; i++)
+  {
+
+    // read the state of the switch into a local variable:
+    bool state = !digitalRead(BUTTONS_PINS[i]); // read rawSignal
+
+    // check to see if you just pressed the button
+    // (i.e. the input went from LOW to HIGH), and you've waited long enough
+    // since the last press to ignore any noise:
+
+    // If the switch changed, due to noise or pressing:
+    if (state != prevButtonState[i])
+    {
+      // reset the debouncing timer
+      lastButtonChange[i] = time;
+    }
+
+    if ((time - lastButtonChange[i]) > DEBOUNCE)
+    {
+      // whatever the reading is at, it's been there for longer than the debounce
+      // delay, so take it as the actual current state:
+
+      // if the button state has changed:
+      if (state != buttonState[i])
+      {
+        buttonState[i] = state;
+      }
+    }
+    prevButtonState[i] = state;
   }
 }
 
