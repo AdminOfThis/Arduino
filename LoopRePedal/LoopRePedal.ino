@@ -8,6 +8,13 @@
 
 #define PIN_LED 4 // Pin of the LED REC_RING
 
+#define PIN_ENC1 MOSI
+#define PIN_ENC2 MISO
+#define PIN_ENC_BUT SCK
+
+#define PIN_DIS_SDA SDA
+#define PIN_DIS_SCK SCL
+
 #define PIN_BANK 5
 #define PIN_CLR 6
 
@@ -27,7 +34,7 @@
 #define PIN_FX3 A4
 #define PIN_FX4 A5
 
-const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, PIN_MODE, PIN_CH1, PIN_CH2, PIN_CH3, PIN_CH4, PIN_FX1, PIN_FX2, PIN_FX3, PIN_FX4};
+const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, PIN_MODE, PIN_CH1, PIN_CH2, PIN_CH3, PIN_CH4, PIN_FX1, PIN_FX2, PIN_FX3, PIN_FX4, PIN_ENC_BUT};
 
 #define LED_RINGS 14 // Number of LED rings
 #define LED_COUNT 8  // Number of LEDs per ring
@@ -48,6 +55,7 @@ int COLOR_GREEN[3] = {0, 255, 0};
 int COLOR_RED[3] = {255, 0, 0};
 int COLOR_BLUE[3] = {0, 0, 255};
 int COLOR_YELLOW[3] = {255, 255, 0};
+int COLOR_ORANGE[3] = {255, 127, 0};
 
 enum LED_MODE
 {
@@ -58,9 +66,9 @@ enum LED_MODE
 };
 
 bool record = false;
-bool play = false;
+bool play = true;
 
-// U8X8_SSD1309_128X64_NONAME0_4W_HW_SPI screen(OLED_CS, OLED_DC, OLED_RESET);
+U8X8_SSD1306_128X64_NONAME_HW_I2C screen(/* reset=*/U8X8_PIN_NONE);
 
 Adafruit_NeoPixel LED(LED_COUNT *LED_RINGS, PIN_LED, NEO_GRB + NEO_KHZ800);
 int color[LED_RINGS][3];
@@ -69,17 +77,22 @@ LED_MODE ledMode[LED_RINGS];
 uint8_t pixel = 0;
 long lastPixelChange = 0;
 
-bool buttonState[LED_RINGS];
-bool buttonPushed[LED_RINGS];
-bool prevButtonState[LED_RINGS];
-long lastButtonChange[LED_RINGS];
+bool buttonState[LED_RINGS+1];
+bool buttonPushed[LED_RINGS+1];
+bool prevButtonState[LED_RINGS+1];
+long lastButtonChange[LED_RINGS+1];
 
 long time = 0;
 long lastTimedChange = 0;
 
+int menuIndex = 0;
+bool encValPrev = LOW;
+
 // *************************************** MIDI VARIABLES ***********************************************
 
 bool modeRec = true;
+bool stopped = true;
+bool recording = false;
 int selectedChannel = 0;
 
 bool chnState[4] = {HIGH, HIGH, HIGH, HIGH};
@@ -95,6 +108,14 @@ void setup()
   {
     pinMode(BUTTONS_PINS[i], INPUT_PULLUP);
   }
+  pinMode(PIN_ENC_BUT, INPUT_PULLUP);
+  pinMode(PIN_ENC1, INPUT_PULLUP);
+  pinMode(PIN_ENC2, INPUT_PULLUP);
+
+  screen.begin(); // initialite display
+  screen.setPowerSave(0);
+  screen.setFont(u8x8_font_8x13_1x2_f); // select font
+  printCentered("LoopPedal v 0.2", 3);
 
   // initialize LED
   LED.begin();
@@ -109,7 +130,7 @@ void setup()
   ledMode[1] = BLINK;
   // REC/PLAY Button
   fillColor(2, COLOR_GREEN);
-  ledMode[2] = ON;
+  ledMode[2] = SPINNING;
   // STOP button
   fillColor(3, COLOR_RED);
   ledMode[3] = ON;
@@ -126,10 +147,7 @@ void setup()
   fillColor(12, COLOR_BLUE);
   fillColor(13, COLOR_BLUE);
 
-  // screen.begin(); // initialite display
-  // screen.setContrast(255);
-  // screen.setFont(u8x8_font_8x13_1x2_f); // select font
-  // screen.drawString(4,4, "Hello, World");
+  // screen.clear();
 }
 
 void loop()
@@ -138,6 +156,36 @@ void loop()
 
   // Buttons
   checkButtons();
+
+  // encoder
+  menuIndex = readEncoder(menuIndex, 1);
+
+  // clr Button
+  if (buttonPushed[1])
+  {
+    stopped = true;
+    play = true;
+    for (int i = 0; i < 4; i++)
+    {
+      fxState[i] = LOW;
+      chnState[i] = HIGH;
+    }
+    modeRec = true;
+    selectedChannel = 0;
+  }
+
+  // rec/play Button
+  if (buttonPushed[2])
+  {
+    stopped = false;
+    play = !play;
+  }
+  // stop button
+  if (buttonPushed[3])
+  {
+    stopped = true;
+    play = true; // restarts with playing, but is stopped for now
+  }
 
   // mode Button
   if (buttonPushed[5])
@@ -148,7 +196,6 @@ void loop()
   // chn Buttons
   for (int i = 0; i < 4; i++)
   {
-
     if (buttonPushed[i + 6])
     {
       if (modeRec)
@@ -173,6 +220,14 @@ void loop()
 
   // ********************************** Lighting handling *******************************************
 
+  ledMode[3] = stopped ? OFF : ON;
+  if (play)
+  {
+    fillColor(2, COLOR_GREEN);
+  }
+
+  ledMode[2] = stopped ? ON : SPINNING; // stop LED
+
   if (modeRec) // mode rec
   {
     fillColor(5, COLOR_RED);
@@ -190,6 +245,15 @@ void loop()
       fillColor(i, COLOR_GREEN);
       ledMode[i] = (chnState[i - 6]) ? ON : OFF;
     }
+  }
+
+  if (play)
+  {
+    fillColor(2, COLOR_GREEN);
+  }
+  else
+  {
+    fillColor(2, COLOR_ORANGE);
   }
 
   // fx buttons
@@ -225,7 +289,7 @@ void fillColor(int target, int source[3])
 
 void checkButtons()
 {
-  for (int i = 0; i < LED_RINGS; i++)
+  for (int i = 0; i < LED_RINGS+1; i++)
   {
     buttonPushed[i] = LOW;
     // read the state of the switch into a local variable:
@@ -320,65 +384,6 @@ void showColor(int ringIndex, int color[3], bool show)
   }
 }
 
-// void checkButtons()
-// {
-//   bool REC_state = !digitalRead(REC_BUTTON);
-
-//   if (REC_state != REC_prevState && REC_lastChange + DEBOUNCE <= millis())
-//   {
-
-//     if (REC_state)
-//     {
-//       noteOn(0, 93, 127);
-//     }
-//     else
-//     {
-//       noteOff(0, 93, 127);
-//     }
-//     MidiUSB.flush();
-
-//     REC_prevState = REC_state;
-//     REC_lastChange = millis();
-
-//     Serial.println("REC_BUTTON");
-//   }
-
-//   bool PLAY_state = !digitalRead(PLAY_BUTTON);
-//   if (PLAY_state != PLAY_prevState && PLAY_lastChange + DEBOUNCE <= millis())
-//   {
-//     if (play)
-//     {
-//       if (PLAY_state)
-//       {
-//         noteOn(0, 91, 127);
-//       }
-//       else
-//       {
-//         noteOff(0, 91, 127);
-//       }
-
-//       Serial.println("PLAY_BUTTON");
-//     }
-//     else
-//     {
-//       if (PLAY_state)
-//       {
-//         noteOn(0, 92, 127);
-//       }
-//       else
-//       {
-//         noteOff(0, 92, 127);
-//       }
-//     }
-//     MidiUSB.flush();
-
-//     PLAY_prevState = PLAY_state;
-//     PLAY_lastChange = millis();
-
-//     Serial.println("PLAY/STOP_BUTTON");
-//   }
-// }
-
 void readMIDI()
 {
   midiEventPacket_t rx = MidiUSB.read();
@@ -464,6 +469,31 @@ void startupLEDs()
   delay(1000);
   for (int i = 0; i < LED_RINGS; i++) // just as backup, fill with default green color
   {
-    fillColor(color[i], COLOR_GREEN);
+    fillColor(i, COLOR_GREEN);
   }
+}
+
+void printCentered(char *s, const int line)
+{
+  screen.drawString(8 - (strlen(s) * .5), (line), s); // put string of display at position X,
+}
+
+int readEncoder(int val, int stepSize)
+{
+  bool val1 = digitalRead(PIN_ENC1);
+  bool val2 = digitalRead(PIN_ENC2);
+  int valNew = val;
+  if ((encValPrev == HIGH) && (val1 == LOW))
+  {
+    if (val2 == HIGH)
+    {
+      valNew = max(-9999, val - stepSize);
+    }
+    else
+    {
+      valNew = min(9999, val + stepSize);
+    }
+  }
+  encValPrev = val1;
+  return valNew;
 }
