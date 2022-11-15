@@ -1,10 +1,16 @@
-#include <SPI.h>
+#include "Menu.h"
+
 #include <Wire.h>
 
 #include "MIDIUSB.h"
 #include <Adafruit_NeoPixel.h>
 
 #include <U8x8lib.h>
+
+#include <EEPROM.h>
+
+#define VERSION "LOOPPEDAL v0.2"
+#define VERSION_LINE2 "by F.Hild"
 
 #define PIN_LED 4 // Pin of the LED REC_RING
 
@@ -39,16 +45,18 @@ const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, 
 #define LED_RINGS 14 // Number of LED rings
 #define LED_COUNT 8  // Number of LEDs per ring
 
-#define DEBOUNCE 10 // Debounce of 10ms
-#define LED_DELTATIME 200
+#define CHANNEL_COUNT 8
 
-#define TIMED_LOOP_DELTA 100
+#define DEBOUNCE 10 // Debounce of 10ms
+#define LED_DELTATIME 250
+
+#define TIMED_LOOP_DELTA 10
+
+#define TIME_UNTIL_MENU 5000
 
 // MIDI SIGNALS
 #define REC 1
 #define PLAY_STOP 2
-
-#define BRIGHTNESS 63
 
 int COLOR_OFF[3] = {0, 0, 0};
 int COLOR_GREEN[3] = {0, 255, 0};
@@ -65,43 +73,78 @@ enum LED_MODE
   BLINK
 };
 
+enum INPUT_MODE
+{
+  MENU,
+  INFO,
+  INPUT_INTEGER,
+  INPUT_BOOLEAN
+};
+
 bool record = false;
 bool play = true;
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C screen(/* reset=*/U8X8_PIN_NONE);
 
+INPUT_MODE inputMode = MENU;
+int *inputIntegerVal;
+int inputIntegerMin;
+int inputIntegerMax;
+int inputIntegerStepsize;
+
+bool *inputBool;
+
+long lastMenuAction = -TIME_UNTIL_MENU;
+char *topStrings[] = {"LED Brightness", "Clear FX", "Version", "Reboot"};
+Menu topMenu(topStrings, 4);
+
+Menu *activeMenu = &topMenu;
+
 Adafruit_NeoPixel LED(LED_COUNT *LED_RINGS, PIN_LED, NEO_GRB + NEO_KHZ800);
 int color[LED_RINGS][3];
 LED_MODE ledMode[LED_RINGS];
+int ledBrightness = 127;
 
 uint8_t pixel = 0;
 long lastPixelChange = 0;
 
-bool buttonState[LED_RINGS+1];
-bool buttonPushed[LED_RINGS+1];
-bool prevButtonState[LED_RINGS+1];
-long lastButtonChange[LED_RINGS+1];
+bool buttonState[LED_RINGS + 1];
+bool buttonPushed[LED_RINGS + 1];
+bool prevButtonState[LED_RINGS + 1];
+long lastButtonChange[LED_RINGS + 1];
 
 long time = 0;
 long lastTimedChange = 0;
 
-int menuIndex = 0;
 bool encValPrev = LOW;
 
+bool clearFXOnClr = true;
+
 // *************************************** MIDI VARIABLES ***********************************************
+
+int firstChannelIndex = 0;
+
+bool firstTimeRec = true;
 
 bool modeRec = true;
 bool stopped = true;
 bool recording = false;
 int selectedChannel = 0;
 
-bool chnState[4] = {HIGH, HIGH, HIGH, HIGH};
-bool fxState[4];
+bool chnState[8] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+bool fxState[8];
 
 void setup()
 {
   Serial.begin(115200);
   Serial.println("Starting LoopPedal v1.0");
+
+  ledBrightness = EEPROM.read(0);
+  clearFXOnClr = EEPROM.read(1);
+  for (int i = 0; i < 4; i++)
+  {
+    fxState[i] = bitRead(EEPROM.read(2), i);
+  }
 
   // initialize Buttons
   for (int i = 0; i < LED_RINGS; i++)
@@ -115,11 +158,11 @@ void setup()
   screen.begin(); // initialite display
   screen.setPowerSave(0);
   screen.setFont(u8x8_font_8x13_1x2_f); // select font
-  printCentered("LoopPedal v 0.2", 3);
+  showInfo();
 
   // initialize LED
   LED.begin();
-  LED.setBrightness(BRIGHTNESS);
+  LED.setBrightness(ledBrightness);
   startupLEDs();
 
   // BANK Button
@@ -147,44 +190,58 @@ void setup()
   fillColor(12, COLOR_BLUE);
   fillColor(13, COLOR_BLUE);
 
-  // screen.clear();
+  clrAll();
+  setupMenues();
+  // topMenu.draw(screen);
 }
 
 void loop()
 {
   time = millis();
 
+  handleMenuIO(time);
+
   // Buttons
   checkButtons();
 
-  // encoder
-  menuIndex = readEncoder(menuIndex, 1);
+  // bankButton
+  if (buttonPushed[0])
+  {
+    firstChannelIndex = (firstChannelIndex == 0) ? 4 : 0;
+  }
 
   // clr Button
   if (buttonPushed[1])
   {
-    stopped = true;
-    play = true;
-    for (int i = 0; i < 4; i++)
-    {
-      fxState[i] = LOW;
-      chnState[i] = HIGH;
-    }
-    modeRec = true;
-    selectedChannel = 0;
+    clrAll();
   }
 
   // rec/play Button
   if (buttonPushed[2])
   {
+
+    if (!stopped && firstTimeRec)
+    {
+      firstTimeRec = false;
+    }
+    else
+    {
+      play = !play;
+    }
     stopped = false;
-    play = !play;
   }
   // stop button
   if (buttonPushed[3])
   {
-    stopped = true;
-    play = true; // restarts with playing, but is stopped for now
+    if (firstTimeRec)
+    {
+      clrAll();
+    }
+    else
+    {
+      stopped = true;
+      play = false; // restarts with playing, but is stopped for now
+    }
   }
 
   // mode Button
@@ -200,11 +257,14 @@ void loop()
     {
       if (modeRec)
       {
-        selectedChannel = i;
+        selectedChannel = i + firstChannelIndex;
+        Serial.print(firstChannelIndex);
+        Serial.print(" , ");
+        Serial.println(selectedChannel);
       }
       else
       {
-        chnState[i] = !chnState[i];
+        chnState[i + firstChannelIndex] = !chnState[i + firstChannelIndex];
       }
     }
   }
@@ -215,18 +275,37 @@ void loop()
     if (buttonPushed[i + 10])
     {
       fxState[i] = !fxState[i];
+      updateFXEEPROM();
     }
   }
 
   // ********************************** Lighting handling *******************************************
 
-  ledMode[3] = stopped ? OFF : ON;
-  if (play)
+  ledMode[0] = (firstChannelIndex == 0) ? ON : BLINK;
+  ledMode[1] = (firstTimeRec && stopped) ? OFF : BLINK;
+
+  if (!stopped)
+  {
+    if (firstTimeRec)
+    {
+      fillColor(2, COLOR_RED);
+    }
+    else if (!play)
+    {
+      fillColor(2, COLOR_ORANGE);
+    }
+    else
+    {
+      fillColor(2, COLOR_GREEN);
+    }
+  }
+  else
   {
     fillColor(2, COLOR_GREEN);
   }
 
   ledMode[2] = stopped ? ON : SPINNING; // stop LED
+  ledMode[3] = stopped ? OFF : ON;
 
   if (modeRec) // mode rec
   {
@@ -234,7 +313,7 @@ void loop()
     for (int i = 6; i < 10; i++)
     {
       fillColor(i, COLOR_RED);
-      ledMode[i] = (selectedChannel + 6 == i) ? ON : OFF;
+      ledMode[i] = (selectedChannel - firstChannelIndex + 6 == i) ? ON : OFF;
     }
   }
   else // mode play
@@ -243,17 +322,8 @@ void loop()
     for (int i = 6; i < 10; i++)
     {
       fillColor(i, COLOR_GREEN);
-      ledMode[i] = (chnState[i - 6]) ? ON : OFF;
+      ledMode[i] = (chnState[i - 6 + firstChannelIndex]) ? ON : OFF;
     }
-  }
-
-  if (play)
-  {
-    fillColor(2, COLOR_GREEN);
-  }
-  else
-  {
-    fillColor(2, COLOR_ORANGE);
   }
 
   // fx buttons
@@ -267,6 +337,8 @@ void loop()
   {
     lastTimedChange = time; // reset timed loop
 
+    handleMenuDisplay();
+
     manageLEDs(); // update LED pattern
     readMIDI();   // read incoming MIDI signals
   }
@@ -276,6 +348,98 @@ void loop()
   {
     lastPixelChange = time;                // reset led rollover timer
     pixel = (pixel + 1) % (LED_COUNT / 2); // rollover LED index
+  }
+}
+
+void clrAll()
+{
+  stopped = true;
+  firstTimeRec = true;
+  play = true;
+  modeRec = true;
+  for (int i = 0; i < 4; i++)
+  {
+    if (clearFXOnClr) // only clear fx if option is enabled
+    {
+      fxState[i] = LOW;
+    }
+  }
+  for (int i = 0; i < CHANNEL_COUNT; i++)
+  {
+
+    chnState[i] = HIGH; // set channel active
+  }
+
+  firstChannelIndex = 0;
+  selectedChannel = 0;
+}
+
+void handleMenuIO(long currentMillis)
+{
+  if (buttonPushed[14])
+  {
+    switch (inputMode)
+    {
+    case MENU:
+      (*activeMenu).action();
+      break;
+    case INPUT_INTEGER:
+    case INPUT_BOOLEAN:
+      EEPROM.update(0, ledBrightness);
+      EEPROM.update(1, clearFXOnClr);
+      updateFXEEPROM();
+
+    case INFO:
+      inputMode = MENU;
+      (*activeMenu).draw(screen);
+      break;
+    }
+    lastMenuAction = currentMillis;
+  }
+  if (lastMenuAction + TIME_UNTIL_MENU < currentMillis)
+  {
+    showInfo();
+  }
+}
+
+void updateFXEEPROM()
+{
+  int fxInt = 0;
+  for (int i = 0; i < 4; i++)
+  {
+    bitWrite(fxInt, i, fxState[i]);
+  }
+  EEPROM.update(2, fxInt);
+}
+
+void handleMenuDisplay()
+{
+  // dont dare replace this with a switch, for some reason it breaks and doesnt enter the INPUT_BOOLEAN case!
+  if (inputMode == MENU)
+  {
+    (*activeMenu).updateMenu(screen, readEncoder((*activeMenu).getIndex(), 1));
+  }
+  if (inputMode == INPUT_INTEGER)
+  {
+    int reading = readEncoder(*inputIntegerVal, inputIntegerStepsize); // read new value
+    int valNew = min(inputIntegerMax, max(inputIntegerMin, reading));  // sanitize value
+
+    if (reading != *inputIntegerVal) // check against old value
+    {
+      *inputIntegerVal = valNew; // if changed, change value
+      drawInputInteger(valNew);  // display change
+    }
+  }
+  if (inputMode == INPUT_BOOLEAN)
+  {
+    int readingBool = readEncoder(*inputBool, 1);
+    bool valNewBool = readingBool % 2;
+
+    if (readingBool != *inputBool)
+    {
+      *inputBool = valNewBool;
+      drawInputBool(valNewBool);
+    }
   }
 }
 
@@ -289,7 +453,7 @@ void fillColor(int target, int source[3])
 
 void checkButtons()
 {
-  for (int i = 0; i < LED_RINGS+1; i++)
+  for (int i = 0; i < LED_RINGS + 1; i++)
   {
     buttonPushed[i] = LOW;
     // read the state of the switch into a local variable:
@@ -327,6 +491,7 @@ void checkButtons()
 
 void manageLEDs()
 {
+  LED.setBrightness(ledBrightness);
   for (int i = 0; i < LED_RINGS; i++)
   {
     switch (ledMode[i])
@@ -480,8 +645,8 @@ void printCentered(char *s, const int line)
 
 int readEncoder(int val, int stepSize)
 {
-  bool val1 = digitalRead(PIN_ENC1);
-  bool val2 = digitalRead(PIN_ENC2);
+  bool val1 = digitalRead(PIN_ENC2);
+  bool val2 = digitalRead(PIN_ENC1);
   int valNew = val;
   if ((encValPrev == HIGH) && (val1 == LOW))
   {
@@ -496,4 +661,78 @@ int readEncoder(int val, int stepSize)
   }
   encValPrev = val1;
   return valNew;
+}
+
+void inputInteger(char *title, int min, int max, int *val, int stepSize)
+{
+  inputMode = INPUT_INTEGER;
+  inputIntegerVal = val;
+  inputIntegerMin = min;
+  inputIntegerMax = max;
+  inputIntegerStepsize = stepSize;
+  screen.clear();
+  screen.drawString(0, 0, title);
+  drawInputInteger(*val);
+}
+
+void drawInputInteger(int valNew)
+{
+  char c[16];
+  itoa(*inputIntegerVal, c, 10);
+  screen.drawString(6, 4, "    ");
+  screen.drawString(6, 4, c);
+  screen.drawString(0, 6, "|              |");
+  double percent = ((double)valNew / ((double)inputIntegerMax));
+  for (int i = 0; i < (round(percent * 14)); i++)
+  {
+    screen.drawString(i + 1, 6, "=");
+  }
+}
+
+void inputBoolean(char *title, bool *val)
+{
+  inputMode = INPUT_BOOLEAN;
+  inputBool = val;
+  screen.clear();
+  screen.drawString(0, 0, title);
+  drawInputBool(*val);
+}
+
+void drawInputBool(bool valNew)
+{
+  if (valNew)
+  {
+    screen.drawString(6, 4, "YES");
+  }
+  else
+  {
+    screen.drawString(6, 4, "NO "); // added a whitespace to remove the 's' from YES
+  }
+}
+
+void setupMenues()
+{
+  topMenu.actions[0] = []() // LED Brightness
+  {
+    inputInteger("LED Brightness", 0, 255, &ledBrightness, 5);
+  };
+  topMenu.actions[1] = []() // ClearFX on Clear Button Pressed
+  {
+    inputBoolean("Clear FX on Clr", &clearFXOnClr);
+  };
+  topMenu.actions[2] = []()
+  {
+    showInfo();
+  };
+}
+
+void showInfo()
+{
+  if (!inputMode == INFO)
+  {
+    inputMode = INFO;
+    screen.clear();
+    printCentered(VERSION, 2);
+    printCentered(VERSION_LINE2, 5);
+  }
 }
