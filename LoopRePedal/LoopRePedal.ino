@@ -54,7 +54,7 @@ const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, 
 
 #define TIME_UNTIL_MENU 5000
 
-// MIDI SIGNALS
+// RECEIVING MIDI SIGNALS
 #define REC 1
 #define PLAY_STOP 2
 
@@ -80,9 +80,6 @@ enum INPUT_MODE
   INPUT_INTEGER,
   INPUT_BOOLEAN
 };
-
-bool record = false;
-bool play = true;
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C screen(/* reset=*/U8X8_PIN_NONE);
 
@@ -122,13 +119,27 @@ bool clearFXOnClr = true;
 
 // *************************************** MIDI VARIABLES ***********************************************
 
+const int CLR = 0x00;
+const int STOP = 0x08;
+const int START_RECORD = 0x09;
+
+// fx specific
+const int FX = 0x60;
+
+// channel specific
+const int UNDO = 0x10;
+const int ARM = 0x20;
+const int OVERDUB = 0x30;
+const int PLAY = 0x40;
+const int ENABLE = 0x50;
+
 int firstChannelIndex = 0;
 
-bool firstTimeRec = true;
+bool firstTimeRec = true; // is true if there is no loop with a defined length set
+bool modeRec = true;      // is true if the 4 channel leds show record Arm
+bool play = false;        // is true if the play button is in play mode (not recording/overdubbing)
+bool stopped = true;      // is true if audio is stopped
 
-bool modeRec = true;
-bool stopped = true;
-bool recording = false;
 int selectedChannel = 0;
 
 bool chnState[8] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
@@ -219,29 +230,53 @@ void loop()
   // rec/play Button
   if (buttonPushed[2])
   {
-
-    if (!stopped && firstTimeRec)
+    if (stopped && firstTimeRec)
     {
-      firstTimeRec = false;
+      controlMIDI(START_RECORD, 127);
     }
-    else
+    if (!stopped && !firstTimeRec)
     {
       play = !play;
+      if (play)
+      {
+        controlMIDI(PLAY + selectedChannel, 127);
+      }
+      else
+      {
+        controlMIDI(OVERDUB + selectedChannel, 127);
+      }
+    }
+    if (!stopped && firstTimeRec)
+    {
+      for (int i = 0; i < CHANNEL_COUNT; i++) // After initial record
+      {
+        controlMIDI(PLAY + i, 127); // stop recording, start playing
+      }
+      firstTimeRec = false;
+    }
+
+    if (stopped && !firstTimeRec)
+    {
+      play = true;
+      for (int i = 0; i < CHANNEL_COUNT; i++) // After initial record
+      {
+        controlMIDI(PLAY + i, 127); // stop recording, start playing
+      }
     }
     stopped = false;
   }
   // stop button
   if (buttonPushed[3])
   {
-    if (firstTimeRec)
-    {
-      clrAll();
-    }
-    else
-    {
-      stopped = true;
-      play = false; // restarts with playing, but is stopped for now
-    }
+    stopped = true;
+    play = false; // restarts with playing, but is stopped for now
+    controlMIDI(STOP, 127);
+  }
+
+  // undo
+  if (buttonPushed[4])
+  {
+    controlMIDI(UNDO + selectedChannel, 127);
   }
 
   // mode Button
@@ -257,14 +292,21 @@ void loop()
     {
       if (modeRec)
       {
+        if (!play && !stopped) // if currently recording
+        {
+          controlMIDI(PLAY + selectedChannel, 127); // stop recording on the current channel
+        }
         selectedChannel = i + firstChannelIndex;
-        Serial.print(firstChannelIndex);
-        Serial.print(" , ");
-        Serial.println(selectedChannel);
+        controlMIDI(ARM + i + firstChannelIndex, 127);
+        if (!play && !stopped) // if currently recording
+        {
+          controlMIDI(OVERDUB + i + firstChannelIndex, 127); // start overdubbing on the new channel
+        }
       }
       else
       {
         chnState[i + firstChannelIndex] = !chnState[i + firstChannelIndex];
+        controlMIDI(ENABLE + i + firstChannelIndex, chnState[i + firstChannelIndex] ? 127 : 0);
       }
     }
   }
@@ -275,9 +317,12 @@ void loop()
     if (buttonPushed[i + 10])
     {
       fxState[i] = !fxState[i];
+      controlMIDI(FX + i, fxState[i] ? 127 : 0);
       updateFXEEPROM();
     }
   }
+
+  MidiUSB.flush(); // flush all aquired MIDI signals
 
   // ********************************** Lighting handling *******************************************
 
@@ -306,6 +351,8 @@ void loop()
 
   ledMode[2] = stopped ? ON : SPINNING; // stop LED
   ledMode[3] = stopped ? OFF : ON;
+
+  ledMode[4] = firstTimeRec ? OFF : ON;
 
   if (modeRec) // mode rec
   {
@@ -340,7 +387,8 @@ void loop()
     handleMenuDisplay();
 
     manageLEDs(); // update LED pattern
-    readMIDI();   // read incoming MIDI signals
+
+    // readMIDI();   // read incoming MIDI signals
   }
   // ********************************************* End Timed Loop ********************************************************************
 
@@ -362,16 +410,23 @@ void clrAll()
     if (clearFXOnClr) // only clear fx if option is enabled
     {
       fxState[i] = LOW;
+      controlMIDI(FX + i, 0);
+      updateFXEEPROM();
     }
   }
   for (int i = 0; i < CHANNEL_COUNT; i++)
   {
 
-    chnState[i] = HIGH; // set channel active
+    chnState[i] = HIGH;                               // set channel active
+    controlMIDI(ENABLE + i + firstChannelIndex, 127); // enable all channels
   }
 
   firstChannelIndex = 0;
   selectedChannel = 0;
+  controlMIDI(ARM + selectedChannel + firstChannelIndex, 127); // reset Arm to first channel
+
+  controlMIDI(STOP, 127);
+  controlMIDI(CLR, 127);
 }
 
 void handleMenuIO(long currentMillis)
@@ -570,11 +625,12 @@ void readMIDI()
       switch (rx.byte2)
       {
       case REC:
-        record = rx.byte3 == 0x7F;
+        play = rx.byte3 == 0x7F;
         // Serial.println("RECORD " + record);
         break;
       case PLAY_STOP:
-        play = rx.byte3 == 0x7F;
+        Serial.println("PLAY DETECTED");
+        stopped = rx.byte3 == 0x7F;
         break;
       default:
         Serial.print("Received unknown: ");
@@ -603,18 +659,29 @@ bool equal(midiEventPacket_t t1, midiEventPacket_t t2)
 
 void noteOn(byte channel, byte pitch, byte velocity)
 {
-
   midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
-
   MidiUSB.sendMIDI(noteOn);
 }
 
 void noteOff(byte channel, byte pitch, byte velocity)
 {
-
   midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
-
   MidiUSB.sendMIDI(noteOff);
+}
+
+// First parameter is the event type (0x0B = control change).
+// Second parameter is the event type, combined with the channel.
+// Third parameter is the control number number (0-119).
+// Fourth parameter is the control value (0-127).
+void controlChange(byte channel, byte control, byte value)
+{
+  midiEventPacket_t event = {0x0B, 0xB0 | channel, control, value};
+  MidiUSB.sendMIDI(event);
+}
+
+void controlMIDI(byte channel, byte val)
+{
+  controlChange(0, channel, val);
 }
 
 void startupLEDs()
