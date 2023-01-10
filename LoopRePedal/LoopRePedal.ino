@@ -9,7 +9,7 @@
 
 #include <EEPROM.h>
 
-#define VERSION "LOOPPEDAL v0.2"
+#define VERSION "LOOPPEDAL v0.3"
 #define VERSION_LINE2 "by F.Hild"
 
 #define PIN_LED 4 // Pin of the LED REC_RING
@@ -92,8 +92,8 @@ int inputIntegerStepsize;
 bool *inputBool;
 
 long lastMenuAction = -TIME_UNTIL_MENU;
-char *topStrings[] = {"LED Brightness", "Clear FX", "Version", "Reboot"};
-Menu topMenu(topStrings, 4);
+char *topStrings[] = {"LED Brightness", "Clear FX", "OD after REC", "Version", "Reboot"};
+Menu topMenu(topStrings, 5);
 
 Menu *activeMenu = &topMenu;
 
@@ -116,6 +116,7 @@ long lastTimedChange = 0;
 bool encValPrev = LOW;
 
 bool clearFXOnClr = true;
+bool overdubAfterRec = true;
 
 // *************************************** MIDI VARIABLES ***********************************************
 
@@ -152,6 +153,7 @@ void setup()
 
   ledBrightness = EEPROM.read(0);
   clearFXOnClr = EEPROM.read(1);
+  overdubAfterRec = EEPROM.read(2);
   for (int i = 0; i < 4; i++)
   {
     fxState[i] = bitRead(EEPROM.read(2), i);
@@ -251,6 +253,10 @@ void loop()
       for (int i = 0; i < CHANNEL_COUNT; i++) // After initial record
       {
         controlMIDI(PLAY + i, 127); // stop recording, start playing
+      }
+      if(overdubAfterRec) {
+        controlMIDI(OVERDUB + selectedChannel, 127); // stop recording, start playing
+        play = false;
       }
       firstTimeRec = false;
     }
@@ -442,6 +448,7 @@ void handleMenuIO(long currentMillis)
     case INPUT_BOOLEAN:
       EEPROM.update(0, ledBrightness);
       EEPROM.update(1, clearFXOnClr);
+      EEPROM.update(2, overdubAfterRec);
       updateFXEEPROM();
 
     case INFO:
@@ -787,7 +794,11 @@ void setupMenues()
   {
     inputBoolean("Clear FX on Clr", &clearFXOnClr);
   };
-  topMenu.actions[2] = []()
+  topMenu.actions[2] = []() // Overdub afer REC
+  {
+    inputBoolean("Overd. after REC", &overdubAfterRec);
+  };
+  topMenu.actions[3] = []()
   {
     showInfo();
   };
