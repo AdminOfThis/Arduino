@@ -48,7 +48,7 @@ const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, 
 #define CHANNEL_COUNT 8
 
 #define DEBOUNCE 10 // Debounce of 10ms
-#define LED_DELTATIME 250
+#define LED_DELTATIME 1000
 
 #define TIMED_LOOP_DELTA 10
 
@@ -146,9 +146,14 @@ int selectedChannel = 0;
 bool chnState[8] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
 bool fxState[8];
 
+double bpm = 120;
+int bpmFlag = 0;
+long lastTempoHeartBeat = 0;
+
 void setup()
 {
   Serial.begin(115200);
+  delay(500);
   Serial.println("Starting LoopPedal v1.0");
 
   ledBrightness = EEPROM.read(0);
@@ -254,7 +259,8 @@ void loop()
       {
         controlMIDI(PLAY + i, 127); // stop recording, start playing
       }
-      if(overdubAfterRec) {
+      if (overdubAfterRec)
+      {
         controlMIDI(OVERDUB + selectedChannel, 127); // stop recording, start playing
         play = false;
       }
@@ -330,6 +336,8 @@ void loop()
 
   MidiUSB.flush(); // flush all aquired MIDI signals
 
+  readMIDI();
+
   // ********************************** Lighting handling *******************************************
 
   ledMode[0] = (firstChannelIndex == 0) ? ON : BLINK;
@@ -398,15 +406,17 @@ void loop()
   }
   // ********************************************* End Timed Loop ********************************************************************
 
-  if ((time - (LED_DELTATIME)) > lastPixelChange) // LED delay counter
+  if (bpmFlag >= 12 || (time - LED_DELTATIME > lastPixelChange)) // LED delay counter
   {
     lastPixelChange = time;                // reset led rollover timer
     pixel = (pixel + 1) % (LED_COUNT / 2); // rollover LED index
+    bpmFlag = 0;
   }
 }
 
 void clrAll()
 {
+  Serial.println("Clr all");
   stopped = true;
   firstTimeRec = true;
   play = true;
@@ -618,37 +628,21 @@ void readMIDI()
   if (rx.header != 0)
   {
 
-    Serial.print(rx.header);
-    Serial.print(" , ");
-    Serial.print(rx.byte1);
-    Serial.print(" , ");
-    Serial.print(rx.byte2);
-    Serial.print(" , ");
-    Serial.print(rx.byte3);
-    Serial.println(" , ");
-
-    if (rx.header = 0xB && rx.byte1 == 0xB0)
+    // Serial.print(rx.header);
+    // Serial.print(" , ");
+    // Serial.print(rx.byte1);
+    // Serial.print(" , ");
+    // Serial.print(rx.byte2);
+    // Serial.print(" , ");
+    // Serial.println(rx.byte3);
+    if (rx.header = 0xB && rx.byte1 == 0xB0 && rx.byte2 == 0x02 && rx.byte3 == 0x7F)
     {
-      switch (rx.byte2)
-      {
-      case REC:
-        play = rx.byte3 == 0x7F;
-        // Serial.println("RECORD " + record);
-        break;
-      case PLAY_STOP:
-        Serial.println("PLAY DETECTED");
-        stopped = rx.byte3 == 0x7F;
-        break;
-      default:
-        Serial.print("Received unknown: ");
-        Serial.print(rx.header, HEX);
-        Serial.print("-");
-        Serial.print(rx.byte1, HEX);
-        Serial.print("-");
-        Serial.print(rx.byte2, HEX);
-        Serial.print("-");
-        Serial.println(rx.byte3, HEX);
-      }
+      Serial.println("Play");
+       bpmFlag=2;
+    }
+    if (rx.header = 0xF && rx.byte1 == 0xF8 /*&& rx.byte2 == 0x2 && rx.byte3 == 0x7F*/)
+    {
+      bpmFlag++;
     }
   }
 }
