@@ -1,0 +1,8 @@
+{
+    "sketch": "Pedal_Test.ino",
+    "board": "arduino:avr:nano",
+    "port": "COM13",
+    "output": "build",
+    "programmer": "arduinoasisp",
+    "configuration": "cpu=atmega168"
+}

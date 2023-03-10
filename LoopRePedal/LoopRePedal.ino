@@ -2,14 +2,16 @@
 
 #include <Wire.h>
 
-#include "MIDIUSB.h"
+#include <MIDIUSB.h>
 #include <Adafruit_NeoPixel.h>
+
+#include <EEPROM.h>
+#include <PCF8574.h>
+#include <Servo.h>
 
 #include <U8x8lib.h>
 
-#include <EEPROM.h>
-
-#define VERSION "LOOPPEDAL v0.3"
+#define VERSION "LOOPPEDAL v0.4"
 #define VERSION_LINE2 "by F.Hild"
 
 #define PIN_LED 4 // Pin of the LED REC_RING
@@ -21,8 +23,12 @@
 #define PIN_DIS_SDA SDA
 #define PIN_DIS_SCK SCL
 
-#define PIN_BANK 5
-#define PIN_CLR 6
+#define PIN_POTI A7
+#define PIN_SERVO 5
+
+// PINS are wired to the PCF IO expander
+#define PIN_BANK 1
+#define PIN_CLR 0
 
 #define PIN_REC 7
 #define PIN_STOP 8
@@ -40,10 +46,11 @@
 #define PIN_FX3 A4
 #define PIN_FX4 A5
 
-const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, PIN_MODE, PIN_CH1, PIN_CH2, PIN_CH3, PIN_CH4, PIN_FX1, PIN_FX2, PIN_FX3, PIN_FX4, PIN_ENC_BUT};
+const uint8_t BUTTONS_PINS[] = {PIN_REC, PIN_STOP, PIN_UNDO, PIN_MODE, PIN_CH1, PIN_CH2, PIN_CH3, PIN_CH4, PIN_FX1, PIN_FX2, PIN_FX3, PIN_FX4, PIN_ENC_BUT};
 
 #define LED_RINGS 14 // Number of LED rings
 #define LED_COUNT 8  // Number of LEDs per ring
+#define LED_PEDAL 9
 
 #define CHANNEL_COUNT 8
 
@@ -58,8 +65,13 @@ const uint8_t BUTTONS_PINS[] = {PIN_BANK, PIN_CLR, PIN_REC, PIN_STOP, PIN_UNDO, 
 #define REC 1
 #define PLAY_STOP 2
 
+const int SERVO_MIN = 43;
+const int SERVO_MAX = 148;
+const int POTI_DEADZONE = 5;
+
 int COLOR_OFF[3] = {0, 0, 0};
 int COLOR_GREEN[3] = {0, 255, 0};
+int COLOR_LIGHT_GREEN[3] = {127, 255, 0};
 int COLOR_RED[3] = {255, 0, 0};
 int COLOR_BLUE[3] = {0, 0, 255};
 int COLOR_YELLOW[3] = {255, 255, 0};
@@ -81,7 +93,11 @@ enum INPUT_MODE
   INPUT_BOOLEAN
 };
 
+// I2C devices
 U8X8_SSD1306_128X64_NONAME_HW_I2C screen(/* reset=*/U8X8_PIN_NONE);
+PCF8574 pcfSwitch(0x21);
+
+Servo servo;
 
 INPUT_MODE inputMode = MENU;
 int *inputIntegerVal;
@@ -97,7 +113,7 @@ Menu topMenu(topStrings, 5);
 
 Menu *activeMenu = &topMenu;
 
-Adafruit_NeoPixel LED(LED_COUNT *LED_RINGS, PIN_LED, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel LED(LED_COUNT *LED_RINGS + LED_PEDAL, PIN_LED, NEO_GRB + NEO_KHZ800);
 int color[LED_RINGS][3];
 LED_MODE ledMode[LED_RINGS];
 int ledBrightness = 127;
@@ -118,14 +134,24 @@ bool encValPrev = LOW;
 bool clearFXOnClr = true;
 bool overdubAfterRec = true;
 
+int potiMin;
+int potiMax;
+
+int pedalValue = 127;
+long lastServoTime;
+bool pedalDetached = false;
+
 // *************************************** MIDI VARIABLES ***********************************************
 
 const int CLR = 0x00;
 const int STOP = 0x08;
 const int START_RECORD = 0x09;
 
+const int ZERO_DB_MIDI = 108;
+
 // fx specific
 const int FX = 0x60;
+const int FX_PARAMETER = 0x68;
 
 // channel specific
 const int UNDO = 0x10;
@@ -133,6 +159,7 @@ const int ARM = 0x20;
 const int OVERDUB = 0x30;
 const int PLAY = 0x40;
 const int ENABLE = 0x50;
+const int VOLUME = 0x70;
 
 int firstChannelIndex = 0;
 
@@ -144,6 +171,7 @@ bool stopped = true;      // is true if audio is stopped
 int selectedChannel = 0;
 
 bool chnState[8] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+int chnVolume[8] = {ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI};
 bool fxState[8];
 
 double bpm = 120;
@@ -164,6 +192,25 @@ void setup()
     fxState[i] = bitRead(EEPROM.read(2), i);
   }
 
+  // initialize LED
+  LED.begin();
+  LED.setBrightness(ledBrightness);
+  for (int i = 0; i < LED_COUNT * LED_RINGS + LED_PEDAL; i++)
+  {
+    LED.setPixelColor(i, LED.Color(0, 0, 0));
+  }
+  LED.show();
+
+  servo.attach(PIN_SERVO);
+  servo.write(SERVO_MIN);
+  delay(1000);
+  potiMin = analogRead(PIN_POTI) - POTI_DEADZONE;
+  servo.write(SERVO_MAX);
+  delay(1000);
+  potiMax = analogRead(PIN_POTI) + POTI_DEADZONE;
+  servo.detach();
+  pedalDetached = true;
+
   // initialize Buttons
   for (int i = 0; i < LED_RINGS; i++)
   {
@@ -173,15 +220,20 @@ void setup()
   pinMode(PIN_ENC1, INPUT_PULLUP);
   pinMode(PIN_ENC2, INPUT_PULLUP);
 
-  screen.begin(); // initialite display
+  pcfSwitch.begin();
+  pcfSwitch.write8(255); // Set all pins to high, so the switches can pull them low
+
+  screen.begin(); // initialize display
   screen.setPowerSave(0);
   screen.setFont(u8x8_font_8x13_1x2_f); // select font
   showInfo();
 
-  // initialize LED
-  LED.begin();
-  LED.setBrightness(ledBrightness);
   startupLEDs();
+
+  for (int i = 0; i < LED_PEDAL; i++)
+  {
+    LED.setPixelColor(LED_COUNT * LED_RINGS + i, LED.Color(0, 0, 255));
+  }
 
   // BANK Button
   fillColor(0, COLOR_YELLOW);
@@ -216,6 +268,10 @@ void setup()
 void loop()
 {
   time = millis();
+
+  handlePedal(time);
+
+  handlePedalLED();
 
   handleMenuIO(time);
 
@@ -309,6 +365,7 @@ void loop()
           controlMIDI(PLAY + selectedChannel, 127); // stop recording on the current channel
         }
         selectedChannel = i + firstChannelIndex;
+        setPedal(chnVolume[selectedChannel]);
         controlMIDI(ARM + i + firstChannelIndex, 127);
         if (!play && !stopped) // if currently recording
         {
@@ -380,10 +437,27 @@ void loop()
   else // mode play
   {
     fillColor(5, COLOR_GREEN);
+
+    // channel buttons
     for (int i = 6; i < 10; i++)
     {
       fillColor(i, COLOR_GREEN);
-      ledMode[i] = (chnState[i - 6 + firstChannelIndex]) ? ON : OFF;
+      if ((chnState[i - 6 + firstChannelIndex]))
+      {
+        // channel is on
+        if ((selectedChannel - firstChannelIndex + 6 == i))
+        {
+          ledMode[i] = SPINNING;
+        }
+        else
+        {
+          ledMode[i] = ON;
+        }
+      }
+      else
+      {
+        ledMode[i] = OFF;
+      }
     }
   }
 
@@ -433,9 +507,17 @@ void clrAll()
   for (int i = 0; i < CHANNEL_COUNT; i++)
   {
 
-    chnState[i] = HIGH;                               // set channel active
-    controlMIDI(ENABLE + i + firstChannelIndex, 127); // enable all channels
+    chnState[i] = HIGH;           // set channel active
+    controlMIDI(ENABLE + i, 127); // enable all channels
   }
+
+  for (int i = 0; i < 8; i++)
+  {
+    chnVolume[i] = ZERO_DB_MIDI;
+    controlMIDI(VOLUME + i, chnVolume[i]);
+  }
+
+  setPedal(chnVolume[0]);
 
   firstChannelIndex = 0;
   selectedChannel = 0;
@@ -529,7 +611,21 @@ void checkButtons()
   {
     buttonPushed[i] = LOW;
     // read the state of the switch into a local variable:
-    bool state = !digitalRead(BUTTONS_PINS[i]); // read rawSignal
+
+    bool state;
+
+    if (i == 0)
+    {
+      state = !pcfSwitch.read(PIN_BANK);
+    }
+    else if (i == 1)
+    {
+      state = !pcfSwitch.read(PIN_CLR);
+    }
+    else
+    {
+      state = !digitalRead(BUTTONS_PINS[i - 2]); // read rawSignal
+    }
 
     // check to see if you just pressed the button
     // (i.e. the input went from LOW to HIGH), and you've waited long enough
@@ -585,6 +681,57 @@ void manageLEDs()
   LED.show();
 }
 
+void setPedal(int val)
+{
+  int a = map(val, 0, 127, SERVO_MIN, SERVO_MAX);
+  servo.attach(PIN_SERVO);
+  servo.write(a);
+  pedalDetached = false;
+  lastServoTime = millis();
+}
+
+void handlePedal(long time)
+{
+  if (time > lastServoTime + 500)
+  {
+    if (!pedalDetached)
+    {
+      servo.detach();
+      pedalDetached = true;
+    }
+    else
+    {
+      int newPedalValue = map(analogRead(PIN_POTI), potiMin, potiMax, 0, 127);
+      if (abs(newPedalValue - pedalValue) >= 3)
+      {
+        pedalValue = newPedalValue;
+        controlMIDI(VOLUME + selectedChannel, pedalValue);
+      }
+      chnVolume[selectedChannel] = pedalValue;
+    }
+  }
+}
+
+void handlePedalLED()
+{
+  int valLED = map(analogRead(PIN_POTI), potiMin, potiMax, 0, LED_PEDAL);
+  for (int i = 0; i < LED_PEDAL - valLED; i++)
+  {
+    LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 0, 0));
+  }
+  for (int i = LED_PEDAL - valLED; i < LED_PEDAL; i++)
+  {
+    if (modeRec)
+    {
+      LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(255, 0, 0));
+    }
+    else
+    {
+      LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 255, 0));
+    }
+  }
+}
+
 void spin(int ringIndex)
 {
   for (int i = 0; i < LED_COUNT; i++)
@@ -638,7 +785,7 @@ void readMIDI()
     if (rx.header = 0xB && rx.byte1 == 0xB0 && rx.byte2 == 0x02 && rx.byte3 == 0x7F)
     {
       Serial.println("Play");
-       bpmFlag=2;
+      bpmFlag = 2;
     }
     if (rx.header = 0xF && rx.byte1 == 0xF8 /*&& rx.byte2 == 0x2 && rx.byte3 == 0x7F*/)
     {
@@ -696,9 +843,17 @@ void startupLEDs()
         LED.setPixelColor((j * LED_COUNT) + k, LED.Color(255 / LED_COUNT * i, 164 / LED_COUNT * i, 255 - (255 / LED_COUNT * i)));
       }
     }
+    // PEDAL
+    LED.setPixelColor(LED_COUNT * LED_RINGS + LED_PEDAL - i - 1, LED.Color(255 / LED_COUNT * i, 164 / LED_COUNT * i, 255 - (255 / LED_COUNT * i)));
+
     LED.show();
     delay(1000 / LED_COUNT);
   }
+  // PEDAL extrawurst
+  delay(1000 / LED_COUNT);
+  LED.setPixelColor(LED_COUNT * LED_RINGS, LED.Color(255 / LED_COUNT * LED_COUNT, 164 / LED_COUNT * LED_COUNT, 255 - (255 / LED_COUNT * LED_COUNT)));
+  LED.show();
+
   delay(1000);
   for (int i = 0; i < LED_RINGS; i++) // just as backup, fill with default green color
   {
