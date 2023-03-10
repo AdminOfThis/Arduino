@@ -347,6 +347,7 @@ void loop()
     stopped = true;
     play = false; // restarts with playing, but is stopped for now
     controlMIDI(STOP, 127);
+    Serial.println("Stop");
   }
 
   // undo
@@ -396,7 +397,6 @@ void loop()
     {
       pedalFXChannel = i;
       setPedal(fxValue[i]);
-      Serial.println(fxValue[i]);
       fxState[i] = !fxState[i];
       controlMIDI(FX + i, fxState[i] ? 127 : 0);
       updateFXEEPROM();
