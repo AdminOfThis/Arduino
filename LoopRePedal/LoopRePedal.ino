@@ -140,6 +140,9 @@ int potiMax;
 int pedalValue = 127;
 long lastServoTime;
 bool pedalDetached = false;
+int pedalFXChannel = -1;
+
+bool longPush = false;
 
 // *************************************** MIDI VARIABLES ***********************************************
 
@@ -172,7 +175,8 @@ int selectedChannel = 0;
 
 bool chnState[8] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
 int chnVolume[8] = {ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI, ZERO_DB_MIDI};
-bool fxState[8];
+bool fxState[4];
+int fxValue[4];
 
 double bpm = 120;
 int bpmFlag = 0;
@@ -181,7 +185,7 @@ long lastTempoHeartBeat = 0;
 void setup()
 {
   Serial.begin(115200);
-  delay(500);
+  // delay(500);
   Serial.println("Starting LoopPedal v1.0");
 
   ledBrightness = EEPROM.read(0);
@@ -190,6 +194,10 @@ void setup()
   for (int i = 0; i < 4; i++)
   {
     fxState[i] = bitRead(EEPROM.read(2), i);
+  }
+  for (int i = 0; i < 4; i++)
+  {
+    fxValue[i] = min(127, EEPROM.read(3 + i));
   }
 
   // initialize LED
@@ -364,6 +372,7 @@ void loop()
         {
           controlMIDI(PLAY + selectedChannel, 127); // stop recording on the current channel
         }
+        pedalFXChannel = -1;
         selectedChannel = i + firstChannelIndex;
         setPedal(chnVolume[selectedChannel]);
         controlMIDI(ARM + i + firstChannelIndex, 127);
@@ -385,6 +394,9 @@ void loop()
   {
     if (buttonPushed[i + 10])
     {
+      pedalFXChannel = i;
+      setPedal(fxValue[i]);
+      Serial.println(fxValue[i]);
       fxState[i] = !fxState[i];
       controlMIDI(FX + i, fxState[i] ? 127 : 0);
       updateFXEEPROM();
@@ -445,7 +457,7 @@ void loop()
       if ((chnState[i - 6 + firstChannelIndex]))
       {
         // channel is on
-        if ((selectedChannel - firstChannelIndex + 6 == i))
+        if (pedalFXChannel < 0 && (selectedChannel - firstChannelIndex + 6 == i))
         {
           ledMode[i] = SPINNING;
         }
@@ -464,7 +476,14 @@ void loop()
   // fx buttons
   for (int i = 0; i < 4; i++)
   {
-    ledMode[i + 10] = fxState[i] ? ON : OFF;
+    if (pedalFXChannel == i)
+    {
+      ledMode[i + 10] = SPINNING;
+    }
+    else
+    {
+      ledMode[i + 10] = fxState[i] ? ON : OFF;
+    }
   }
 
   // ********************************************* Timed Loop ********************************************************************
@@ -501,6 +520,7 @@ void clrAll()
     {
       fxState[i] = LOW;
       controlMIDI(FX + i, 0);
+      controlMIDI(FX_PARAMETER + i, fxValue[i]);
       updateFXEEPROM();
     }
   }
@@ -521,6 +541,7 @@ void clrAll()
 
   firstChannelIndex = 0;
   selectedChannel = 0;
+  pedalFXChannel = -1;
   controlMIDI(ARM + selectedChannel + firstChannelIndex, 127); // reset Arm to first channel
 
   controlMIDI(STOP, 127);
@@ -562,6 +583,7 @@ void updateFXEEPROM()
   for (int i = 0; i < 4; i++)
   {
     bitWrite(fxInt, i, fxState[i]);
+    EEPROM.update(3 + i, fxValue[i]);
   }
   EEPROM.update(2, fxInt);
 }
@@ -638,7 +660,17 @@ void checkButtons()
       lastButtonChange[i] = time;
     }
 
-    if ((time - lastButtonChange[i]) > DEBOUNCE)
+    if (!longPush && state && (time - lastButtonChange[i]) > DEBOUNCE && time - lastButtonChange[i] > 500)
+    {
+      if (i >= 10 && i < 14)
+      {
+        pedalFXChannel = i - 10;
+        setPedal(fxValue[pedalFXChannel]);
+      }
+      longPush = true;
+    }
+
+    if (!longPush && (time - lastButtonChange[i]) > DEBOUNCE)
     {
       // whatever the reading is at, it's been there for longer than the debounce
       // delay, so take it as the actual current state:
@@ -646,13 +678,22 @@ void checkButtons()
       // if the button state has changed:
       if (state != buttonState[i])
       {
+
         buttonState[i] = state;
-        if (buttonState[i])
+        if (!buttonState[i])
         {
           buttonPushed[i] = HIGH;
         }
       }
     }
+
+    if (state != prevButtonState[i] && longPush)
+    {
+      longPush = false;
+      lastButtonChange[i] = time + 100;
+      buttonState[i] = state;
+    }
+
     prevButtonState[i] = state;
   }
 }
@@ -683,6 +724,7 @@ void manageLEDs()
 
 void setPedal(int val)
 {
+  pedalValue = val;
   int a = map(val, 0, 127, SERVO_MIN, SERVO_MAX);
   servo.attach(PIN_SERVO);
   servo.write(a);
@@ -705,9 +747,17 @@ void handlePedal(long time)
       if (abs(newPedalValue - pedalValue) >= 3)
       {
         pedalValue = newPedalValue;
-        controlMIDI(VOLUME + selectedChannel, pedalValue);
+        if (pedalFXChannel < 0)
+        {
+          controlMIDI(VOLUME + selectedChannel, pedalValue);
+          chnVolume[selectedChannel] = pedalValue;
+        }
+        else
+        {
+          fxValue[pedalFXChannel] = pedalValue;
+          controlMIDI(FX_PARAMETER + pedalFXChannel, pedalValue);
+        }
       }
-      chnVolume[selectedChannel] = pedalValue;
     }
   }
 }
@@ -721,13 +771,20 @@ void handlePedalLED()
   }
   for (int i = LED_PEDAL - valLED; i < LED_PEDAL; i++)
   {
-    if (modeRec)
+    if (pedalFXChannel >= 0)
     {
-      LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(255, 0, 0));
+      LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 0, 255));
     }
     else
     {
-      LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 255, 0));
+      if (modeRec)
+      {
+        LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(255, 0, 0));
+      }
+      else
+      {
+        LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 255, 0));
+      }
     }
   }
 }
