@@ -197,7 +197,8 @@ void setup()
   }
   for (int i = 0; i < 4; i++)
   {
-    fxValue[i] = min(127, EEPROM.read(3 + i));
+    int val = EEPROM.read(3 + i);
+    fxValue[i] = constrain(val, 0, 127);
   }
 
   // initialize LED
@@ -598,7 +599,7 @@ void handleMenuDisplay()
   if (inputMode == INPUT_INTEGER)
   {
     int reading = readEncoder(*inputIntegerVal, inputIntegerStepsize); // read new value
-    int valNew = min(inputIntegerMax, max(inputIntegerMin, reading));  // sanitize value
+    int valNew = constrain(reading, inputIntegerMin, inputIntegerMax); // sanitize value
 
     if (reading != *inputIntegerVal) // check against old value
     {
@@ -764,27 +765,45 @@ void handlePedal(long time)
 
 void handlePedalLED()
 {
-  int valLED = map(analogRead(PIN_POTI), potiMin, potiMax, 0, LED_PEDAL);
-  for (int i = 0; i < LED_PEDAL - valLED; i++)
+  int valuePoti = analogRead(PIN_POTI);
+
+  float step = abs(float(potiMax - potiMin)) / float(LED_PEDAL + 1);
+  int valLED = LED_PEDAL - (valuePoti - min(potiMin, potiMax)) / round(step);
+
+  double rest = step - (valuePoti - min(potiMin, potiMax)) % round(step);
+
+  double brightnessNextLED = constrain((double(map(rest, 0, step, 0, 255)) / 255.0), 0.0, 1.0);
+
+  uint32_t c;
+  if (pedalFXChannel >= 0)
   {
-    LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 0, 0));
+    c = LED.Color(0, 0, 255);
   }
-  for (int i = LED_PEDAL - valLED; i < LED_PEDAL; i++)
+  else
   {
-    if (pedalFXChannel >= 0)
+    if (modeRec)
     {
-      LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 0, 255));
+      c = LED.Color(255, 0, 0);
     }
     else
     {
-      if (modeRec)
-      {
-        LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(255, 0, 0));
-      }
-      else
-      {
-        LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 255, 0));
-      }
+      c = LED.Color(0, 255, 0);
+    }
+  }
+
+  for (int i = 0; i < LED_PEDAL; i++)
+  {
+    if (LED_PEDAL - i > valLED)
+    {
+      LED.setPixelColor(LED_RINGS * LED_COUNT + i, LED.Color(0, 0, 0));
+    }
+    else if (LED_PEDAL - i == valLED)
+    {
+      LED.setPixelColor(LED_RINGS * LED_COUNT + i, c * brightnessNextLED);
+    }
+    else
+    {
+      LED.setPixelColor(LED_RINGS * LED_COUNT + i, c);
     }
   }
 }
