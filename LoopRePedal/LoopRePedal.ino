@@ -149,6 +149,7 @@ bool longPush = false;
 const int CLR = 0x00;
 const int STOP = 0x08;
 const int START_RECORD = 0x09;
+const int MIDI_TOGGLE_BANK = 0x0A;
 
 const int ZERO_DB_MIDI = 108;
 
@@ -290,7 +291,10 @@ void loop()
   // bankButton
   if (buttonPushed[0])
   {
+    Serial.println("Switched Bank");
     firstChannelIndex = (firstChannelIndex == 0) ? 4 : 0;
+    controlMIDI(MIDI_TOGGLE_BANK, ((firstChannelIndex == 0) ? 0 : 127)); 
+    
   }
 
   // clr Button
